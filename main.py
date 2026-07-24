@@ -12,10 +12,15 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ================= CẤU HÌNH SERVER =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN") # Bot Quản lý Key (Gõ lệnh /vip, /free...)
+FEEDBACK_BOT_TOKEN = os.getenv("FEEDBACK_BOT_TOKEN") # Bot chuyên gửi ảnh Top 1
 ADMIN_ID = os.getenv("ADMIN_ID")
 SERVER_URL = os.getenv("SERVER_URL")
 FIREBASE_CONFIG = os.getenv("FIREBASE_JSON")
+FEEDBACK_CHAT_ID = os.getenv("FEEDBACK_CHAT_ID")
+IMGBB_KEY = os.getenv("IMGBB_KEY")
+
+
 
 # Xử lý ADMIN_ID để tránh lỗi format
 try:
@@ -593,6 +598,56 @@ def start_services():
         t.start()
 
 start_services()
+
+
+# ================= API GỬI ẢNH FEEDBACK TOP 1 =================
+@server.route('/send_top1', methods=['POST'])
+def send_top1():
+    base64_image = request.form.get('base64_image')
+    caption = request.form.get('caption')
+
+    if not base64_image or not caption:
+        return jsonify({"status": False, "msg": "Thiếu dữ liệu"}), 400
+
+    # BƯỚC 1: Server Python tự động tải ảnh lên ImgBB
+    imgbb_url = "https://api.imgbb.com/1/upload"
+    imgbb_payload = {
+        "key": IMGBB_KEY,
+        "image": base64_image
+    }
+    
+    try:
+        r_img = requests.post(imgbb_url, data=imgbb_payload)
+        r_json = r_img.json()
+        if not r_json.get('success'):
+            return jsonify({"status": False, "msg": "Lỗi Upload ImgBB"}), 500
+        
+        image_url = r_json['data'].get('display_url') or r_json['data'].get('url')
+    except Exception as e:
+        return jsonify({"status": False, "msg": f"Lỗi kết nối ImgBB: {str(e)}"}), 500
+
+    # BƯỚC 2: Server ném Link vào Telegram thông qua con Bot Nô Tỳ (FEEDBACK_BOT_TOKEN)
+    # Nếu chưa cài biến mới, nó sẽ tự động dùng con Bot cũ để chống sập (Fallback)
+    use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
+    tg_url = f"https://api.telegram.org/bot{use_token}/sendPhoto"
+    
+    tg_payload = {
+        "chat_id": FEEDBACK_CHAT_ID,
+        "photo": image_url,
+        "caption": caption,
+        "parse_mode": "HTML"
+    }
+    
+    try:
+        r_tg = requests.post(tg_url, data=tg_payload)
+        if r_tg.status_code == 200:
+            return jsonify({"status": True, "msg": "Đã gửi vào Group VIP!"})
+        else:
+            return jsonify({"status": False, "msg": f"Lỗi Telegram: {r_tg.text}"}), 500
+    except Exception as e:
+        return jsonify({"status": False, "msg": f"Lỗi kết nối Telegram: {str(e)}"}), 500
+
+
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
