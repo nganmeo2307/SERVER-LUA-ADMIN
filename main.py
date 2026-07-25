@@ -315,12 +315,14 @@ def show_menu(m):
    `/reset `- *Reset thiết bị (nhập ID hệ thống)*
    `/lockkey `- *Khóa key*
    `/unlockkey `- *Mở khóa key*
+   `/listlockkey `- *Xem danh sách Key bị khóa*
 
 3️⃣ *CHẶN THIẾT BỊ*
    `/blockmodel `- *Chặn thiết bị*
    `/unlockmodel `- *Mở chặn thiết bị*
    `/listblock `- *Xem danh sách chặn*
 """, parse_mode="Markdown")
+
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(m):
@@ -559,6 +561,47 @@ def unlock_key_cmd(m):
         else:
             bot.reply_to(m, "❌ Key không tồn tại.")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
+    
+# --- DANH SÁCH KEY BỊ KHÓA ---
+@bot.message_handler(commands=['listlockkey'])
+def list_locked_keys_cmd(m):
+    if not check_admin(m.from_user.id): return
+    try:
+        # Lọc trực tiếp những key có is_locked == True
+        docs = db.collection('keys').where('is_locked', '==', True).stream()
+        
+        count = 0
+        msg = "🔒 *DANH SÁCH KEY ĐANG BỊ KHÓA* 🔒\n\n"
+        
+        for doc in docs:
+            count += 1
+            k_id = doc.id
+            v = doc.to_dict()
+            game_tag = v.get('game_id', 'KHÁC').upper()
+            key_type = v.get('type', 'Unknown').upper()
+            info = v.get('info', 'Không có ghi chú')
+            hwid = v.get('hwid', 'Chưa Active')
+            
+            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n"
+            msg += f"  ├ 📱 HWID: `{hwid}`\n"
+            msg += f"  └ ⚠️ Lý do: {info}\n\n"
+            
+        if count == 0:
+            return bot.reply_to(m, "📭 Hiện tại không có Key nào bị khóa.")
+            
+        header = f"📊 *Tổng cộng:* {count} Key bị khóa.\n" + "="*20 + "\n\n"
+        final_msg = header + msg
+        
+        # Telegram giới hạn 4096 ký tự/tin nhắn
+        if len(final_msg) > 4000:
+            part_1 = final_msg[:4000] + "\n\n⚠️ *Danh sách quá dài, chỉ hiển thị một phần...*"
+            bot.reply_to(m, part_1, parse_mode="Markdown")
+        else:
+            bot.reply_to(m, final_msg, parse_mode="Markdown")
+            
+    except Exception as e:
+        bot.reply_to(m, f"Lỗi: {e}")
+
 
 @bot.message_handler(commands=['blockmodel'])
 def block_model_cmd(m):
@@ -637,19 +680,29 @@ def send_top1():
     safe_pattern = r"^🏆 <b>PAK LUA VIP AKMODPUBG</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: \*\*\*.*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
     
     if not re.match(safe_pattern, clean_caption):
-        # Trừng phạt: Khóa luôn Key của thằng dám xài HttpCanary sửa Text
+        # Trừng phạt: Khóa luôn Key và đưa HWID vào Blacklist
         try:
             doc, real_key_id = get_key_document(vip_key, "LUAPAK")
             if doc:
+                # 1. Khóa vĩnh viễn Key trên DB
                 db.collection('keys').document(real_key_id).update({
                     "is_locked": True,
                     "info": "Auto Ban: Dùng tool sửa bậy Text Feedback"
                 })
-                # Báo cáo về cho Admin
+                
+                # 2. AUTO BLOCK MODEL (Thêm HWID vào listblock)
+                if hwid:
+                    blacklist_ref = db.collection('settings').document('blacklist')
+                    if not blacklist_ref.get().exists:
+                        blacklist_ref.set({"models": [hwid]})
+                    else:
+                        blacklist_ref.update({"models": firestore.ArrayUnion([hwid])})
+
+                # 3. Báo cáo về cho Admin
                 notify_msg = (
                     f"🚫 *AUTO BAN SỬA TEXT BẬY BẠ* 🚫\n"
                     f"🔑 *Key:* `{vip_key}`\n"
-                    f"📱 *HWID:* `{hwid}`\n"
+                    f"📱 *HWID:* `{hwid}` (Đã Auto thêm vào Blacklist)\n"
                     f"⚠️ *Lý do:* Cố tình sửa đoạn Text gửi ảnh.\n"
                 )
                 use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
@@ -660,8 +713,9 @@ def send_top1():
                 })
         except Exception:
             pass
-        return jsonify({"status": False, "msg": "Phát hiện sửa đổi dữ liệu! Key đã bị khóa."}), 403
+        return jsonify({"status": False, "msg": "Phát hiện sửa đổi dữ liệu! Thiết bị và Key đã bị khóa vĩnh viễn."}), 403
     # ===============================================================
+
 
     # ===============================================================
     # LỚP KHIÊN 1: KIỂM TRA KEY VIP VÀ HWID CÓ HỢP LỆ KHÔNG
