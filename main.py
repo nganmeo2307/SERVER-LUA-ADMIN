@@ -45,7 +45,7 @@ server.json.ensure_ascii = False
 
 # [THÊM DÒNG NÀY]: Khóa mõm hacker gửi file rác.
 # Bất kỳ request nào lớn hơn 5MB sẽ bị Server sút bay ngay cửa bảo vệ (Mã 413) mà không hề tốn RAM!
-server.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 
+server.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 
 
 
 # ================= KẾT NỐI FIREBASE =================
