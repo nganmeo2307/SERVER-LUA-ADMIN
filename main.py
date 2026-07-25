@@ -20,6 +20,11 @@ FIREBASE_CONFIG = os.getenv("FIREBASE_JSON")
 FEEDBACK_CHAT_ID = os.getenv("FEEDBACK_CHAT_ID")
 IMGBB_KEY = os.getenv("IMGBB_KEY")
 
+# Bộ nhớ đệm lưu thời gian gửi ảnh cuối cùng của từng HWID
+LAST_FEEDBACK_TIME = {}
+# Khoảng thời gian cấm gửi liên tiếp (Tính bằng giây, 600 giây = 10 phút)
+COOLDOWN_SECONDS = 600 
+
 
 
 # Xử lý ADMIN_ID để tránh lỗi format
@@ -600,14 +605,130 @@ def start_services():
 start_services()
 
 
+
+
 # ================= API GỬI ẢNH FEEDBACK TOP 1 =================
 @server.route('/send_top1', methods=['POST'])
 def send_top1():
     base64_image = request.form.get('base64_image')
     caption = request.form.get('caption')
+    
+    # 1. Nhận thêm Key VIP và HWID từ Game gửi lên
+    vip_key = request.form.get('vip_key', '').strip()
+    hwid = request.form.get('hwid', '').strip()
 
-    if not base64_image or not caption:
-        return jsonify({"status": False, "msg": "Thiếu dữ liệu"}), 400
+    if not base64_image or not caption or not vip_key or not hwid:
+        return jsonify({"status": False, "msg": "Thiếu dữ liệu hoặc nghi ngờ Spam"}), 400
+
+    # ===============================================================
+    # LỚP KHIÊN 1.5: CHỐNG CHỈNH SỬA TEXT BẬY BẠ (TAMPER PROTECTION)
+    # ===============================================================
+    import re
+    # Xóa ký tự xuống dòng rác \r nếu có để so sánh cho chuẩn
+    clean_caption = caption.replace('\r', '')
+    
+    # Cái khuôn sắt: Dấu ^ là bắt đầu, dấu $ là kết thúc. 
+    # .* đại diện cho biến số thay đổi. Khóa chết toàn bộ cấu trúc!
+    safe_pattern = r"^🏆 <b>PAK LUA VIP V12</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: \*\*\*.*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
+    
+    if not re.match(safe_pattern, clean_caption):
+        # Trừng phạt: Khóa luôn Key của thằng dám xài HttpCanary sửa Text
+        try:
+            doc, real_key_id = get_key_document(vip_key, "LUAPAK")
+            if doc:
+                db.collection('keys').document(real_key_id).update({
+                    "is_locked": True,
+                    "info": "Auto Ban: Dùng tool sửa bậy Text Feedback"
+                })
+                # Báo cáo về cho Admin
+                notify_msg = (
+                    f"🚫 *AUTO BAN SỬA TEXT BẬY BẠ* 🚫\n"
+                    f"🔑 *Key:* `{vip_key}`\n"
+                    f"📱 *HWID:* `{hwid}`\n"
+                    f"⚠️ *Lý do:* Cố tình sửa đoạn Text gửi ảnh.\n"
+                )
+                use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
+                requests.post(f"https://api.telegram.org/bot{use_token}/sendMessage", data={
+                    "chat_id": REAL_ADMIN_ID,
+                    "text": notify_msg,
+                    "parse_mode": "Markdown"
+                })
+        except Exception:
+            pass
+        return jsonify({"status": False, "msg": "Phát hiện sửa đổi dữ liệu! Key đã bị khóa."}), 403
+    # ===============================================================
+
+    # ===============================================================
+    # LỚP KHIÊN 1: KIỂM TRA KEY VIP VÀ HWID CÓ HỢP LỆ KHÔNG
+    # ===============================================================
+    if not db:
+        return jsonify({"status": False, "msg": "Lỗi DB"}), 500
+        
+    doc, real_key_id = get_key_document(vip_key, "LUAPAK")
+    if not doc:
+        return jsonify({"status": False, "msg": "Lỗi kết nối"}), 403
+        
+    key_data = doc.to_dict()
+    if key_data.get('is_locked', False):
+        return jsonify({"status": False, "msg": "Lỗi kết nối"}), 403
+        
+    # Check Hạn sử dụng
+    try:
+        expiry_dt = datetime.datetime.strptime(key_data.get('expiry', ''), "%Y-%m-%d %H:%M:%S")
+        if datetime.datetime.now() > expiry_dt:
+            return jsonify({"status": False, "msg": "Key đã hết hạn!"}), 403
+    except:
+        pass
+
+    # Check HWID chống leak link
+    if key_data.get('type') == 'vip':
+        if key_data.get('hwid') and key_data.get('hwid') != hwid:
+            return jsonify({"status": False, "msg": "ERROR"}), 403
+    else:
+        if hwid not in key_data.get('hwids', []):
+            return jsonify({"status": False, "msg": "ERROR"}), 403
+    # ===============================================================
+
+    # ===============================================================
+    # LỚP KHIÊN 2: CHỐNG SPAM & AUTO BAN (TRẢM THỦ)
+    # ===============================================================
+    current_time = time.time()
+    if hwid in LAST_FEEDBACK_TIME:
+        time_passed = current_time - LAST_FEEDBACK_TIME[hwid]
+        if time_passed < COOLDOWN_SECONDS:
+            # Phát hiện Spam -> KHÓA KEY VĨNH VIỄN TRÊN FIREBASE
+            try:
+                # 1. Cập nhật trạng thái khóa trên Database
+                db.collection('keys').document(real_key_id).update({
+                    "is_locked": True,
+                    "info": "Auto Ban: Spam API Feedback"
+                })
+                
+                # 2. Gửi thông báo mật về thẳng inbox của Admin qua Bot Feedback
+                notify_msg = (
+                    f"🚫 *AUTO BAN SPAM FEEDBACK* 🚫\n"
+                    f"🔑 *Key:* `{vip_key}`\n"
+                    f"📱 *HWID:* `{hwid}`\n"
+                    f"⚠️ *Lý do:* Cố tình dùng Tool Spam gửi ảnh liên tục."
+                )
+                
+                use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
+                noti_url = f"https://api.telegram.org/bot{use_token}/sendMessage"
+                
+                # Gửi thẳng vào tin nhắn riêng của Admin (REAL_ADMIN_ID), không gửi ra Group
+                requests.post(noti_url, data={
+                    "chat_id": REAL_ADMIN_ID,
+                    "text": notify_msg,
+                    "parse_mode": "Markdown"
+                })
+            except Exception as e:
+                print(f"Lỗi khi Auto Ban: {e}")
+                
+            return jsonify({"status": False, "msg": "Phát hiện Spam! Key của bạn đã bị khóa vĩnh viễn."}), 429
+
+    # Cập nhật lại mốc thời gian gửi thành công
+    LAST_FEEDBACK_TIME[hwid] = current_time
+    # ===============================================================
 
     # BƯỚC 1: Server Python tự động tải ảnh lên ImgBB
     imgbb_url = "https://api.imgbb.com/1/upload"
@@ -626,13 +747,12 @@ def send_top1():
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi kết nối ImgBB: {str(e)}"}), 500
 
-    # BƯỚC 2: Server ném Link vào Telegram thông qua con Bot Nô Tỳ (FEEDBACK_BOT_TOKEN)
-    # Nếu chưa cài biến mới, nó sẽ tự động dùng con Bot cũ để chống sập (Fallback)
+    # BƯỚC 2: Server ném Link vào Telegram
     use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
     tg_url = f"https://api.telegram.org/bot{use_token}/sendPhoto"
     
     tg_payload = {
-        "chat_id": FEEDBACK_CHAT_ID,
+        "chat_id": FEEDBACK_CHAT_ID,  # Đã fix đồng bộ tên biến với đầu file
         "photo": image_url,
         "caption": caption,
         "parse_mode": "HTML"
@@ -646,7 +766,6 @@ def send_top1():
             return jsonify({"status": False, "msg": f"Lỗi Telegram: {r_tg.text}"}), 500
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi kết nối Telegram: {str(e)}"}), 500
-
 
 
 if __name__ == "__main__":
