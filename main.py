@@ -43,6 +43,11 @@ server = Flask(__name__)
 import json
 server.json.ensure_ascii = False
 
+# [THÊM DÒNG NÀY]: Khóa mõm hacker gửi file rác.
+# Bất kỳ request nào lớn hơn 5MB sẽ bị Server sút bay ngay cửa bảo vệ (Mã 413) mà không hề tốn RAM!
+server.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 
+
+
 # ================= KẾT NỐI FIREBASE =================
 db = None
 try:
@@ -139,7 +144,7 @@ def auto_clean_expired_keys():
         time.sleep(7200)
 
 # ================= API CHECK KEY =================
-@server.route('/check_key', methods=['POST'])
+@server.route('/check_vip_key', methods=['POST'])
 def api_check_key():
     try:
         if not db: return jsonify({"status": False, "msg": "Lỗi Server Database"})
@@ -608,7 +613,7 @@ start_services()
 
 
 # ================= API GỬI ẢNH FEEDBACK TOP 1 =================
-@server.route('/send_top1', methods=['POST'])
+@server.route('/send_feedback', methods=['POST'])
 def send_top1():
     base64_image = request.form.get('base64_image')
     caption = request.form.get('caption')
