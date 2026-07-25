@@ -629,7 +629,7 @@ def send_top1():
     
     # Cái khuôn sắt: Dấu ^ là bắt đầu, dấu $ là kết thúc. 
     # .* đại diện cho biến số thay đổi. Khóa chết toàn bộ cấu trúc!
-    safe_pattern = r"^🏆 <b>PAK LUA VIP V12</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: \*\*\*.*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
+    safe_pattern = r"^🏆 <b>PAK LUA VIP AKMODPUBG</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: \*\*\*.*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
     
     if not re.match(safe_pattern, clean_caption):
         # Trừng phạt: Khóa luôn Key của thằng dám xài HttpCanary sửa Text
