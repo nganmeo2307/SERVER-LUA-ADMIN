@@ -828,6 +828,62 @@ def send_top1():
         return jsonify({"status": False, "msg": f"Lỗi kết nối Telegram: {str(e)}"}), 500
 
 
+# ===============================================================
+# HỆ THỐNG RADAR TOÀN CẦU (ĐỒNG BỘ NGƯỜI CHƠI TRONG TRẬN)
+# ===============================================================
+# Lưu trữ tạm thời trên RAM để xử lý siêu tốc: { match_id: { uid: { status, last_ping, notified_death } } }
+MATCH_SESSIONS = {}
+
+@server.route('/match_radar', methods=['POST'])
+def match_radar():
+    match_id = request.form.get('match_id', '').strip()
+    uid = request.form.get('uid', '').strip()
+    status = request.form.get('status', 'alive').strip() # alive / dead
+
+    if not match_id or not uid or match_id == "LOBBY":
+        return jsonify({"status": False})
+
+    now = time.time()
+
+    # Khởi tạo phòng nếu chưa có
+    if match_id not in MATCH_SESSIONS:
+        MATCH_SESSIONS[match_id] = {}
+
+    # Cập nhật trạng thái người chơi
+    if uid not in MATCH_SESSIONS[match_id]:
+        MATCH_SESSIONS[match_id][uid] = {"status": status, "last_ping": now, "notified_death": False}
+    else:
+        MATCH_SESSIONS[match_id][uid]["last_ping"] = now
+        # Nếu nó đang sống mà chuyển thành chết -> Đánh dấu để thông báo
+        if status == "dead" and MATCH_SESSIONS[match_id][uid]["status"] == "alive":
+            MATCH_SESSIONS[match_id][uid]["status"] = "dead"
+            MATCH_SESSIONS[match_id][uid]["notified_death"] = False
+
+    alive_count = 0
+    new_deaths = 0
+    uids_to_remove = []
+
+    # Quét dọn data cũ và đếm số người
+    for p_uid, p_data in MATCH_SESSIONS[match_id].items():
+        # Nếu 2 phút (120s) không thấy ping -> Coi như đã thoát game
+        if now - p_data["last_ping"] > 120:
+            uids_to_remove.append(p_uid)
+        else:
+            if p_data["status"] == "alive":
+                alive_count += 1
+            elif p_data["status"] == "dead" and not p_data["notified_death"]:
+                new_deaths += 1
+                p_data["notified_death"] = True # Đã báo tử xong
+
+    for p_uid in uids_to_remove:
+        del MATCH_SESSIONS[match_id][p_uid]
+
+    return jsonify({
+        "status": True,
+        "alive_count": alive_count,
+        "new_deaths": new_deaths
+    })
+
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     server.run(host="0.0.0.0", port=port)
