@@ -831,7 +831,7 @@ def send_top1():
 # ===============================================================
 # HỆ THỐNG RADAR TOÀN CẦU (ĐỒNG BỘ NGƯỜI CHƠI TRONG TRẬN)
 # ===============================================================
-# Lưu trữ tạm thời trên RAM để xử lý siêu tốc: { match_id: { uid: { status, last_ping, notified_death } } }
+# Lưu trữ tạm thời trên RAM: { match_id: { uid: { status, last_ping, notified_death } } }
 MATCH_SESSIONS = {}
 
 @server.route('/match_radar', methods=['POST'])
@@ -862,6 +862,7 @@ def match_radar():
     alive_count = 0
     new_deaths = 0
     uids_to_remove = []
+    mod_uids_list = [] # [THÊM MỚI] Danh sách chứa UID của Đồng Dâm
 
     # Quét dọn data cũ và đếm số người
     for p_uid, p_data in MATCH_SESSIONS[match_id].items():
@@ -869,6 +870,7 @@ def match_radar():
         if now - p_data["last_ping"] > 120:
             uids_to_remove.append(p_uid)
         else:
+            mod_uids_list.append(str(p_uid)) # Bơm UID vào danh sách bảo vệ
             if p_data["status"] == "alive":
                 alive_count += 1
             elif p_data["status"] == "dead" and not p_data["notified_death"]:
@@ -877,11 +879,15 @@ def match_radar():
 
     for p_uid in uids_to_remove:
         del MATCH_SESSIONS[match_id][p_uid]
+        
+    # Ghép mảng UID thành chuỗi cách nhau bởi dấu phẩy
+    mod_uids_string = ",".join(mod_uids_list)
 
     return jsonify({
         "status": True,
         "alive_count": alive_count,
-        "new_deaths": new_deaths
+        "new_deaths": new_deaths,
+        "mod_uids": mod_uids_string # Trả chuỗi này về cho Client Lua đọc
     })
 
 if __name__ == "__main__":
