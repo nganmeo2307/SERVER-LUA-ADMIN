@@ -60,7 +60,7 @@ try:
             firebase_admin.get_app()
         except ValueError:
             firebase_admin.initialize_app(cred)
-        db = firestore.client()
+        db = firestore.client(project=cred_dict.get("project_id"))
         print("✅ KẾT NỐI FIREBASE THÀNH CÔNG!")
 except Exception as e:
     print(f"⚠️ Lỗi kết nối Firebase: {e}")
