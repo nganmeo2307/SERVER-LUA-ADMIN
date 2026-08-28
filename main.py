@@ -534,30 +534,28 @@ def reset_key(m):
     except: pass
 
 @bot.message_handler(commands=['resetallkey'])
-def reset_all_keys(m):
+def reset_all_vip_keys(m):
     # Kiểm tra quyền Admin
     if not check_admin(m.from_user.id): return
     
     # Gửi tin báo trạng thái đang xử lý
-    msg = bot.reply_to(m, "⏳ *Đang tiến hành reset toàn bộ thiết bị của các key. Vui lòng đợi...*", parse_mode="Markdown")
+    msg = bot.reply_to(m, "⏳ *Đang tiến hành reset thiết bị cho toàn bộ KEY VIP. Vui lòng đợi...*", parse_mode="Markdown")
     
     try:
-        docs = db.collection('keys').stream()
+        # Tối ưu: Chỉ truy vấn những key có type là 'vip'
+        docs = db.collection('keys').where('type', '==', 'vip').stream()
         count = 0
         
         for doc in docs:
             ref = db.collection('keys').document(doc.id)
-            dt = doc.to_dict()
-            
-            # Xóa HWID tùy theo loại key giống logic của lệnh /reset đơn lẻ
-            if dt.get('type') == 'vip': 
-                ref.update({"hwid": None, "info": "Đã Reset"})
-            else: 
-                ref.update({"hwids": []})
-                
+            # Tiến hành reset HWID của key VIP
+            ref.update({
+                "hwid": None, 
+                "info": "Đã Reset"
+            })
             count += 1
             
-        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` key trên hệ thống.", 
+        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` KEY VIP trên hệ thống.", 
                               chat_id=m.chat.id, 
                               message_id=msg.message_id, 
                               parse_mode="Markdown")
