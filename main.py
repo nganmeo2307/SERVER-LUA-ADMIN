@@ -313,6 +313,7 @@ def show_menu(m):
    `/list `- *Xem list key (theo Game)*
    `/delete `- *Xóa key (nhập ID hệ thống)*
    `/reset `- *Reset thiết bị (nhập ID hệ thống)*
+   `/resetallkey `- *Reset thiết bị TOÀN BỘ key*
    `/lockkey `- *Khóa key*
    `/unlockkey `- *Mở khóa key*
    `/listlockkey `- *Xem danh sách Key bị khóa*
@@ -531,6 +532,41 @@ def reset_key(m):
         else:
             bot.reply_to(m, "❌ Key không tồn tại (Nhập đúng ID hệ thống).")
     except: pass
+
+@bot.message_handler(commands=['resetallkey'])
+def reset_all_keys(m):
+    # Kiểm tra quyền Admin
+    if not check_admin(m.from_user.id): return
+    
+    # Gửi tin báo trạng thái đang xử lý
+    msg = bot.reply_to(m, "⏳ *Đang tiến hành reset toàn bộ thiết bị của các key. Vui lòng đợi...*", parse_mode="Markdown")
+    
+    try:
+        docs = db.collection('keys').stream()
+        count = 0
+        
+        for doc in docs:
+            ref = db.collection('keys').document(doc.id)
+            dt = doc.to_dict()
+            
+            # Xóa HWID tùy theo loại key giống logic của lệnh /reset đơn lẻ
+            if dt.get('type') == 'vip': 
+                ref.update({"hwid": None, "info": "Đã Reset"})
+            else: 
+                ref.update({"hwids": []})
+                
+            count += 1
+            
+        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` key trên hệ thống.", 
+                              chat_id=m.chat.id, 
+                              message_id=msg.message_id, 
+                              parse_mode="Markdown")
+    except Exception as e:
+        bot.edit_message_text(f"❌ *Có lỗi xảy ra trong quá trình reset:*\n`{e}`", 
+                              chat_id=m.chat.id, 
+                              message_id=msg.message_id, 
+                              parse_mode="Markdown")
+
 
 @bot.message_handler(commands=['lockkey'])
 def lock_key_cmd(m):
