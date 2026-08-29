@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import requests
+import base64
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -18,14 +19,13 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 SERVER_URL = os.getenv("SERVER_URL")
 FIREBASE_CONFIG = os.getenv("FIREBASE_JSON")
 FEEDBACK_CHAT_ID = os.getenv("FEEDBACK_CHAT_ID")
-IMGBB_KEY = os.getenv("IMGBB_KEY")
+
+# Đã bỏ IMGBB_KEY vì không cần xài nữa
 
 # Bộ nhớ đệm lưu thời gian gửi ảnh cuối cùng của từng HWID
 LAST_FEEDBACK_TIME = {}
 # Khoảng thời gian cấm gửi liên tiếp (Tính bằng giây, 600 giây = 10 phút)
 COOLDOWN_SECONDS = 600 
-
-
 
 # Xử lý ADMIN_ID để tránh lỗi format
 try:
@@ -40,13 +40,10 @@ telebot.logger.setLevel(logging.INFO)
 # Khởi tạo Bot và Flask
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 server = Flask(__name__)
-import json
 server.json.ensure_ascii = False
 
-# [THÊM DÒNG NÀY]: Khóa mõm hacker gửi file rác.
-# Bất kỳ request nào lớn hơn 5MB sẽ bị Server sút bay ngay cửa bảo vệ (Mã 413) mà không hề tốn RAM!
+# Khóa mõm hacker gửi file rác. Nâng lên 20MB cho ảnh iOS
 server.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 
-
 
 # ================= KẾT NỐI FIREBASE =================
 db = None
@@ -125,10 +122,8 @@ def auto_clean_expired_keys():
         try:
             if db:
                 now = datetime.datetime.now()
-                # Định dạng thời gian hiện tại thành chuỗi để query trực tiếp
                 now_str = now.strftime("%Y-%m-%d %H:%M:%S")
                 
-                # CHỈ lấy những key có thời gian hết hạn nhỏ hơn thời gian hiện tại
                 expired_docs = db.collection('keys').where('expiry', '<', now_str).stream()
                 
                 for doc in expired_docs:
@@ -140,7 +135,6 @@ def auto_clean_expired_keys():
         except Exception as e:
             print(f"⚠️ Auto Clean thread error: {e}")
         
-        # Tăng thời gian chờ lên 2 tiếng (7200 giây) thay vì 60 giây
         time.sleep(7200)
 
 # ================= API CHECK KEY =================
@@ -149,12 +143,10 @@ def api_check_key():
     try:
         if not db: return jsonify({"status": False, "msg": "Lỗi Server Database"})
         
-        # --- THAY ĐỔI Ở ĐÂY: Lấy dữ liệu từ Form thay vì JSON ---
         client_key = request.form.get('key', '').strip()
         client_hwid = request.form.get('hwid', '').strip()
         client_game_id = request.form.get('game_id', '').strip().lower()
 
-        # Nếu request gửi lên không có key, có thể nó là JSON fallback (để an toàn, ta bắt cả 2)
         if not client_key:
             data = request.get_json(silent=True) or {}
             client_key = data.get('key', '').strip()
@@ -169,7 +161,6 @@ def api_check_key():
             blacklist_doc = db.collection('settings').document('blacklist').get()
             if blacklist_doc.exists:
                 blocked_models = blacklist_doc.to_dict().get('models', [])
-                # So sánh trực tiếp với HWID client gửi lên
                 for blocked_kw in blocked_models:
                     if str(blocked_kw).strip() == client_hwid:
                         return jsonify({"status": False, "msg": f"Thiết bị của bạn đã bị Admin chặn!"})
@@ -184,7 +175,7 @@ def api_check_key():
         key_data = doc.to_dict()
         doc_ref = db.collection('keys').document(real_key_id) 
 
-        # --- 3. CHECK GAME ID (CHỐNG DÙNG CHÉO TOOL) ---
+        # --- 3. CHECK GAME ID ---
         key_game_id = key_data.get('game_id', 'all').lower()
         if key_game_id != 'all' and key_game_id != client_game_id:
              return jsonify({
@@ -214,7 +205,7 @@ def api_check_key():
             if stored_hwid is None:
                 doc_ref.update({
                     "hwid": client_hwid,
-                    "info": f"Active {client_hwid}"  # Đổi thành lưu log theo HWID
+                    "info": f"Active {client_hwid}"  
                 })
                 notify_msg = (
                     f"👑 *ĐÃ KÍCH HOẠT KEY VIP ({key_game_id.upper()})* 👑\n"
@@ -329,184 +320,121 @@ def show_menu(m):
 def send_welcome(m):
     if check_admin(m.from_user.id): show_menu(m)
 
-# --- TẠO VIP: /vip <game> <time> ---
+# --- Các lệnh tạo, xóa, reset key giữ nguyên ---
 @bot.message_handler(commands=['vip'])
 def create_vip(m):
     if not check_admin(m.from_user.id): return
     try:
         args = m.text.split()
         if len(args) < 3: return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/vip pubg 1d`")
-        
         game_id = args[1].lower()
         expiry, label = calculate_expiry(args[2])
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
-        
         key = f"{game_id.upper()}-VIP-{str(uuid.uuid4())[:6].upper()}"
-        data = {
-            "type": "vip", 
-            "game_id": game_id,
-            "hwid": None, 
-            "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), 
-            "info": "Chưa kích hoạt",
-            "is_locked": False,
-            "created_at": firestore.SERVER_TIMESTAMP
-        }
+        data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP }
         db.collection('keys').document(key).set(data)
         bot.reply_to(m, f"👑 *TẠO KEY VIP {game_id.upper()} ({label})*\n\n🔑 *KEY*: `{key}`", parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
-# --- TẠO FREE: /free <game> <slot> <time> ---
 @bot.message_handler(commands=['free'])
 def create_free(m):
     if not check_admin(m.from_user.id): return
     try:
         args = m.text.split()
         if len(args) < 4: return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/free pubg 10 1d`")
-        
         game_id = args[1].lower()
         max_d = int(args[2])
         expiry, label = calculate_expiry(args[3])
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
-        
         key = f"{game_id.upper()}-FREE-{str(uuid.uuid4())[:6].upper()}"
-        data = {
-            "type": "free",
-            "game_id": game_id, 
-            "max_devices": max_d, "hwids": [], 
-            "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), 
-            "info": f"Free ({max_d} slots)",
-            "is_locked": False,
-            "created_at": firestore.SERVER_TIMESTAMP
-        }
+        data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP }
         db.collection('keys').document(key).set(data)
         bot.reply_to(m, f"🎁 *TẠO KEY FREE {game_id.upper()} ({max_d} SLOT - {label})*\n\n🔑 *KEY:* `{key}`", parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
-# --- TẠO CUSTOM (CHO PHÉP TRÙNG KEY NẾU KHÁC GAME) ---
 @bot.message_handler(commands=['custom'])
 def create_custom(m):
     if not check_admin(m.from_user.id): return
     try:
         args = m.text.split()
         type_k = args[1].lower()
-        
         if type_k == 'vip':
-            # /custom vip <game> <time> <name>
             game_id = args[2].lower()
             expiry, label = calculate_expiry(args[3])
             user_key_name = args[4].strip()
-            
-            # Lưu với ID là GAME-KEY để tránh trùng
             db_id = f"{game_id.upper()}-{user_key_name}"
-            
-            if db.collection('keys').document(db_id).get().exists: 
-                return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
-            
-            data = {
-                "type": "vip",
-                "game_id": game_id,
-                "hwid": None, 
-                "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), 
-                "info": "Chưa kích hoạt", 
-                "is_locked": False
-            }
+            if db.collection('keys').document(db_id).get().exists: return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
+            data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False }
             db.collection('keys').document(db_id).set(data)
             bot.reply_to(m, f"👑 *CUSTOM VIP {game_id.upper()} ({label})*\n\n🔑 *KEY:* `{user_key_name}`\n(ID Hệ thống: `{db_id}`)", parse_mode="Markdown")
-            
         elif type_k == 'free':
-            # /custom free <game> <slot> <time> <name>
             game_id = args[2].lower()
             max_d = int(args[3])
             expiry, label = calculate_expiry(args[4])
             user_key_name = args[5].strip()
-            
-            # Lưu với ID là GAME-KEY
             db_id = f"{game_id.upper()}-{user_key_name}"
-
-            if db.collection('keys').document(db_id).get().exists: 
-                return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
-            
-            data = {
-                "type": "free",
-                "game_id": game_id,
-                "max_devices": max_d, 
-                "hwids": [], 
-                "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), 
-                "info": f"Free ({max_d} slots)", 
-                "is_locked": False
-            }
+            if db.collection('keys').document(db_id).get().exists: return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
+            data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False }
             db.collection('keys').document(db_id).set(data)
             bot.reply_to(m, f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*\n\n🔑 *KEY:* `{user_key_name}`", parse_mode="Markdown")
-    except: 
-        bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
+    except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
 
-# --- DANH SÁCH KEY (PHÂN LOẠI THEO GAME) ---
 @bot.message_handler(commands=['list'])
 def list_keys(m):
     if not check_admin(m.from_user.id): return
-    
     docs = db.collection('keys').stream()
-    
-    # 1. Gom nhóm Key theo Game ID
-    grouped_keys = {} # {'PUBG': [str1, str2], 'LIENQUAN': [...]}
+    grouped_keys = {}
     total_count = 0
-    
     for doc in docs:
         total_count += 1
         k_id = doc.id
         v = doc.to_dict()
         game_tag = v.get('game_id', 'KHÁC').upper()
-        
         is_expired = False
         is_locked = v.get('is_locked', False)
         expiry_str = v.get('expiry', 'N/A')
-
         try:
             exp = datetime.datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
             if datetime.datetime.now() > exp: is_expired = True
         except: pass
 
-        if is_locked:
-            stt_icon = "🔒 ĐÃ KHÓA"
-        elif is_expired:
-            stt_icon = "🔴 Hết hạn"
+        if is_locked: stt_icon = "🔒 ĐÃ KHÓA"
+        elif is_expired: stt_icon = "🔴 Hết hạn"
         else:
             if v.get('type') == 'vip':
                 if v.get('hwid'):
                     raw_info = v.get('info', '')
                     dev_name = raw_info.replace("Active ", "").strip() if "Active" in raw_info else "Online"
                     stt_icon = f"🟢 {dev_name}"
-                else:
-                    stt_icon = "⚪ Chưa dùng"
+                else: stt_icon = "⚪ Chưa dùng"
             else:
                 used = len(v.get('hwids', []))
                 mx = v.get('max_devices', 0)
                 stt_icon = f"🎁 {used}/{mx} Slot"
 
         key_line = f"  ▪ `{k_id}`\n    └ {stt_icon} | ⏳ {expiry_str}"
-        
-        if game_tag not in grouped_keys:
-            grouped_keys[game_tag] = []
+        if game_tag not in grouped_keys: grouped_keys[game_tag] = []
         grouped_keys[game_tag].append(key_line)
 
-    if total_count == 0:
-        bot.reply_to(m, "📭 Database trống.")
-        return
+    if total_count == 0: return bot.reply_to(m, "📭 Database trống.")
 
     msg = "📊 *DANH SÁCH KEY THEO GAME*\n"
     sorted_games = sorted(grouped_keys.keys())
-    
     for game in sorted_games:
         key_list = grouped_keys[game]
         msg += f"\n➖➖➖➖➖➖➖➖➖➖\n🎮 *{game}* ({len(key_list)} key)\n"
-        for line in key_list:
-            msg += line + "\n"
+        for line in key_list: msg += line + "\n"
 
+    # Fix lỗi quá giới hạn 4000 ký tự cắt gãy markdown
     if len(msg) > 4000:
-        part_1 = msg[:4000] + "\n\n⚠️ *Danh sách quá dài...*"
-        bot.reply_to(m, part_1, parse_mode="Markdown")
+        safe_part = msg[:4000].replace("`", "").replace("*", "") 
+        part_1 = safe_part + "\n\n⚠️ Danh sách quá dài, chỉ hiển thị một phần..."
+        bot.reply_to(m, part_1)
     else:
-        bot.reply_to(m, msg, parse_mode="Markdown")
+        try:
+            bot.reply_to(m, msg, parse_mode="Markdown")
+        except Exception:
+            bot.reply_to(m, msg.replace("`", "").replace("*", ""))
 
 @bot.message_handler(commands=['delete'])
 def delete_key(m):
@@ -529,42 +457,23 @@ def reset_key(m):
             if dt['type'] == 'vip': ref.update({"hwid": None, "info": "Đã Reset"})
             else: ref.update({"hwids": []})
             bot.reply_to(m, f"♻️ Đã Reset: `{key}`", parse_mode="Markdown")
-        else:
-            bot.reply_to(m, "❌ Key không tồn tại (Nhập đúng ID hệ thống).")
+        else: bot.reply_to(m, "❌ Key không tồn tại (Nhập đúng ID hệ thống).")
     except: pass
 
 @bot.message_handler(commands=['resetallkey'])
 def reset_all_vip_keys(m):
-    # Kiểm tra quyền Admin
     if not check_admin(m.from_user.id): return
-    
-    # Gửi tin báo trạng thái đang xử lý
     msg = bot.reply_to(m, "⏳ *Đang tiến hành reset thiết bị cho toàn bộ KEY VIP. Vui lòng đợi...*", parse_mode="Markdown")
-    
     try:
-        # Tối ưu: Chỉ truy vấn những key có type là 'vip'
         docs = db.collection('keys').where('type', '==', 'vip').stream()
         count = 0
-        
         for doc in docs:
             ref = db.collection('keys').document(doc.id)
-            # Tiến hành reset HWID của key VIP
-            ref.update({
-                "hwid": None, 
-                "info": "Đã Reset"
-            })
+            ref.update({"hwid": None, "info": "Đã Reset"})
             count += 1
-            
-        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` KEY VIP trên hệ thống.", 
-                              chat_id=m.chat.id, 
-                              message_id=msg.message_id, 
-                              parse_mode="Markdown")
+        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` KEY VIP trên hệ thống.", chat_id=m.chat.id, message_id=msg.message_id, parse_mode="Markdown")
     except Exception as e:
-        bot.edit_message_text(f"❌ *Có lỗi xảy ra trong quá trình reset:*\n`{e}`", 
-                              chat_id=m.chat.id, 
-                              message_id=msg.message_id, 
-                              parse_mode="Markdown")
-
+        bot.edit_message_text(f"❌ *Có lỗi xảy ra trong quá trình reset:*\n`{e}`", chat_id=m.chat.id, message_id=msg.message_id, parse_mode="Markdown")
 
 @bot.message_handler(commands=['lockkey'])
 def lock_key_cmd(m):
@@ -577,8 +486,7 @@ def lock_key_cmd(m):
         if ref.get().exists:
             ref.update({"is_locked": True})
             bot.reply_to(m, f"🔒 Đã KHÓA key: `{key}`\n(User sẽ bị đá sau 30s)", parse_mode="Markdown")
-        else:
-            bot.reply_to(m, "❌ Key không tồn tại.")
+        else: bot.reply_to(m, "❌ Key không tồn tại.")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
 @bot.message_handler(commands=['unlockkey'])
@@ -592,21 +500,16 @@ def unlock_key_cmd(m):
         if ref.get().exists:
             ref.update({"is_locked": False})
             bot.reply_to(m, f"🔓 Đã MỞ KHÓA key: `{key}`", parse_mode="Markdown")
-        else:
-            bot.reply_to(m, "❌ Key không tồn tại.")
+        else: bot.reply_to(m, "❌ Key không tồn tại.")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
     
-# --- DANH SÁCH KEY BỊ KHÓA ---
 @bot.message_handler(commands=['listlockkey'])
 def list_locked_keys_cmd(m):
     if not check_admin(m.from_user.id): return
     try:
-        # Lọc trực tiếp những key có is_locked == True
         docs = db.collection('keys').where('is_locked', '==', True).stream()
-        
         count = 0
         msg = "🔒 *DANH SÁCH KEY ĐANG BỊ KHÓA* 🔒\n\n"
-        
         for doc in docs:
             count += 1
             k_id = doc.id
@@ -615,27 +518,22 @@ def list_locked_keys_cmd(m):
             key_type = v.get('type', 'Unknown').upper()
             info = v.get('info', 'Không có ghi chú')
             hwid = v.get('hwid', 'Chưa Active')
+            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n  ├ 📱 HWID: `{hwid}`\n  └ ⚠️ Lý do: {info}\n\n"
             
-            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n"
-            msg += f"  ├ 📱 HWID: `{hwid}`\n"
-            msg += f"  └ ⚠️ Lý do: {info}\n\n"
-            
-        if count == 0:
-            return bot.reply_to(m, "📭 Hiện tại không có Key nào bị khóa.")
-            
-        header = f"📊 *Tổng cộng:* {count} Key bị khóa.\n" + "="*20 + "\n\n"
-        final_msg = header + msg
+        if count == 0: return bot.reply_to(m, "📭 Hiện tại không có Key nào bị khóa.")
         
-        # Telegram giới hạn 4096 ký tự/tin nhắn
+        final_msg = f"📊 *Tổng cộng:* {count} Key bị khóa.\n" + "="*20 + "\n\n" + msg
+        
+        # Fix lỗi quá giới hạn
         if len(final_msg) > 4000:
-            part_1 = final_msg[:4000] + "\n\n⚠️ *Danh sách quá dài, chỉ hiển thị một phần...*"
-            bot.reply_to(m, part_1, parse_mode="Markdown")
+            safe_part = final_msg[:4000].replace("`", "").replace("*", "") 
+            part_1 = safe_part + "\n\n⚠️ Danh sách quá dài, chỉ hiển thị một phần..."
+            bot.reply_to(m, part_1)
         else:
-            bot.reply_to(m, final_msg, parse_mode="Markdown")
+            try: bot.reply_to(m, final_msg, parse_mode="Markdown")
+            except Exception: bot.reply_to(m, final_msg.replace("`", "").replace("*", ""))
             
-    except Exception as e:
-        bot.reply_to(m, f"Lỗi: {e}")
-
+    except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
 @bot.message_handler(commands=['blockmodel'])
 def block_model_cmd(m):
@@ -644,10 +542,8 @@ def block_model_cmd(m):
         cmd_text = m.text.replace("/blockmodel", "").strip()
         if not cmd_text: return bot.reply_to(m, "⚠️ Nhập tên Model!")
         ref = db.collection('settings').document('blacklist')
-        if not ref.get().exists:
-            ref.set({"models": [cmd_text]})
-        else:
-            ref.update({"models": firestore.ArrayUnion([cmd_text])})
+        if not ref.get().exists: ref.set({"models": [cmd_text]})
+        else: ref.update({"models": firestore.ArrayUnion([cmd_text])})
         bot.reply_to(m, f"🚫 Đã thêm Model vào Blacklist:\n`{cmd_text}`", parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
@@ -661,8 +557,7 @@ def unlock_model_cmd(m):
         if ref.get().exists:
             ref.update({"models": firestore.ArrayRemove([cmd_text])})
             bot.reply_to(m, f"✅ Đã gỡ chặn Model:\n`{cmd_text}`", parse_mode="Markdown")
-        else:
-            bot.reply_to(m, "❌ Chưa có danh sách chặn nào.")
+        else: bot.reply_to(m, "❌ Chưa có danh sách chặn nào.")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
 @bot.message_handler(commands=['listblock'])
@@ -686,16 +581,12 @@ def start_services():
 
 start_services()
 
-
-
-
 # ================= API GỬI ẢNH FEEDBACK TOP 1 =================
 @server.route('/send_feedback', methods=['POST'])
 def send_top1():
     base64_image = request.form.get('base64_image')
     caption = request.form.get('caption')
     
-    # 1. Nhận thêm Key VIP và HWID từ Game gửi lên
     vip_key = request.form.get('vip_key', '').strip()
     hwid = request.form.get('hwid', '').strip()
 
@@ -706,26 +597,19 @@ def send_top1():
     # LỚP KHIÊN 1.5: CHỐNG CHỈNH SỬA TEXT BẬY BẠ (TAMPER PROTECTION)
     # ===============================================================
     import re
-    # Xóa ký tự xuống dòng rác \r nếu có để so sánh cho chuẩn
     clean_caption = caption.replace('\r', '')
     
-    # Cái khuôn sắt: Dấu ^ là bắt đầu, dấu $ là kết thúc. 
-    # .* đại diện cho biến số thay đổi. Khóa chết toàn bộ cấu trúc!
     safe_pattern = r"^🏆 <b>PAK LUA VIP AKMODPUBG</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: .*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
-
     
     if not re.match(safe_pattern, clean_caption):
-        # Trừng phạt: Khóa luôn Key và đưa HWID vào Blacklist
         try:
             doc, real_key_id = get_key_document(vip_key, "LUAPAK")
             if doc:
-                # 1. Khóa vĩnh viễn Key trên DB
                 db.collection('keys').document(real_key_id).update({
                     "is_locked": True,
                     "info": "Auto Ban: Dùng tool sửa bậy Text Feedback"
                 })
                 
-                # 2. AUTO BLOCK MODEL (Thêm HWID vào listblock)
                 if hwid:
                     blacklist_ref = db.collection('settings').document('blacklist')
                     if not blacklist_ref.get().exists:
@@ -733,7 +617,6 @@ def send_top1():
                     else:
                         blacklist_ref.update({"models": firestore.ArrayUnion([hwid])})
 
-                # 3. Báo cáo về cho Admin
                 notify_msg = (
                     f"🚫 *AUTO BAN SỬA TEXT BẬY BẠ* 🚫\n"
                     f"🔑 *Key:* `{vip_key}`\n"
@@ -749,8 +632,6 @@ def send_top1():
         except Exception:
             pass
         return jsonify({"status": False, "msg": "Phát hiện sửa đổi dữ liệu! Thiết bị và Key đã bị khóa vĩnh viễn."}), 403
-    # ===============================================================
-
 
     # ===============================================================
     # LỚP KHIÊN 1: KIỂM TRA KEY VIP VÀ HWID CÓ HỢP LỆ KHÔNG
@@ -766,7 +647,6 @@ def send_top1():
     if key_data.get('is_locked', False):
         return jsonify({"status": False, "msg": "Lỗi kết nối"}), 403
         
-    # Check Hạn sử dụng
     try:
         expiry_dt = datetime.datetime.strptime(key_data.get('expiry', ''), "%Y-%m-%d %H:%M:%S")
         if datetime.datetime.now() > expiry_dt:
@@ -774,14 +654,12 @@ def send_top1():
     except:
         pass
 
-    # Check HWID chống leak link
     if key_data.get('type') == 'vip':
         if key_data.get('hwid') and key_data.get('hwid') != hwid:
             return jsonify({"status": False, "msg": "ERROR"}), 403
     else:
         if hwid not in key_data.get('hwids', []):
             return jsonify({"status": False, "msg": "ERROR"}), 403
-    # ===============================================================
 
     # ===============================================================
     # LỚP KHIÊN 2: CHỐNG SPAM & AUTO BAN (TRẢM THỦ)
@@ -790,15 +668,12 @@ def send_top1():
     if hwid in LAST_FEEDBACK_TIME:
         time_passed = current_time - LAST_FEEDBACK_TIME[hwid]
         if time_passed < COOLDOWN_SECONDS:
-            # Phát hiện Spam -> KHÓA KEY VĨNH VIỄN TRÊN FIREBASE
             try:
-                # 1. Cập nhật trạng thái khóa trên Database
                 db.collection('keys').document(real_key_id).update({
                     "is_locked": True,
                     "info": "Auto Ban: Spam API Feedback"
                 })
                 
-                # 2. Gửi thông báo mật về thẳng inbox của Admin qua Bot Feedback
                 notify_msg = (
                     f"🚫 *AUTO BAN SPAM FEEDBACK* 🚫\n"
                     f"🔑 *Key:* `{vip_key}`\n"
@@ -809,7 +684,6 @@ def send_top1():
                 use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
                 noti_url = f"https://api.telegram.org/bot{use_token}/sendMessage"
                 
-                # Gửi thẳng vào tin nhắn riêng của Admin (REAL_ADMIN_ID), không gửi ra Group
                 requests.post(noti_url, data={
                     "chat_id": REAL_ADMIN_ID,
                     "text": notify_msg,
@@ -820,44 +694,41 @@ def send_top1():
                 
             return jsonify({"status": False, "msg": "Phát hiện Spam! Key của bạn đã bị khóa vĩnh viễn."}), 429
 
-    # Cập nhật lại mốc thời gian gửi thành công
     LAST_FEEDBACK_TIME[hwid] = current_time
+
     # ===============================================================
-
-    # BƯỚC 1: Server Python tự động tải ảnh lên ImgBB
-    imgbb_url = "https://api.imgbb.com/1/upload"
-    imgbb_payload = {
-        "key": IMGBB_KEY,
-        "image": base64_image
-    }
-    
+    # BƯỚC 1: GIẢI MÃ ẢNH TRỰC TIẾP TRÊN RAM (BỎ QUA IMGBB)
+    # ===============================================================
     try:
-        r_img = requests.post(imgbb_url, data=imgbb_payload)
-        r_json = r_img.json()
-        if not r_json.get('success'):
-            return jsonify({"status": False, "msg": "Lỗi Upload ImgBB"}), 500
-        
-        image_url = r_json['data'].get('display_url') or r_json['data'].get('url')
+        image_bytes = base64.b64decode(base64_image)
     except Exception as e:
-        return jsonify({"status": False, "msg": f"Lỗi kết nối ImgBB: {str(e)}"}), 500
+        return jsonify({"status": False, "msg": "Lỗi giải mã ảnh từ Game"}), 400
 
-    # BƯỚC 2: Server ném Link vào Telegram
+    # ===============================================================
+    # BƯỚC 2: BẮN THẲNG ẢNH LÊN TELEGRAM BẰNG MULTIPART FILE UPLOAD
+    # ===============================================================
     use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
     tg_url = f"https://api.telegram.org/bot{use_token}/sendPhoto"
     
-    tg_payload = {
-        "chat_id": FEEDBACK_CHAT_ID,  # Đã fix đồng bộ tên biến với đầu file
-        "photo": image_url,
+    tg_data = {
+        "chat_id": FEEDBACK_CHAT_ID,
         "caption": caption,
         "parse_mode": "HTML"
     }
     
+    tg_files = {
+        "photo": ("top1_akmod.jpg", image_bytes, "image/jpeg")
+    }
+    
     try:
-        r_tg = requests.post(tg_url, data=tg_payload)
-        if r_tg.status_code == 200:
+        r_tg = requests.post(tg_url, data=tg_data, files=tg_files)
+        r_json = r_tg.json()
+        
+        if r_tg.status_code == 200 and r_json.get('ok'):
             return jsonify({"status": True, "msg": "Đã gửi vào Group VIP!"})
         else:
-            return jsonify({"status": False, "msg": f"Lỗi Telegram: {r_tg.text}"}), 500
+            err_desc = r_json.get('description', 'Unknown Error')
+            return jsonify({"status": False, "msg": f"Lỗi Telegram: {err_desc}"}), 500
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi kết nối Telegram: {str(e)}"}), 500
 
@@ -865,7 +736,6 @@ def send_top1():
 # ===============================================================
 # HỆ THỐNG RADAR TOÀN CẦU (ĐỒNG BỘ NGƯỜI CHƠI TRONG TRẬN)
 # ===============================================================
-# Lưu trữ tạm thời trên RAM: { match_id: { uid: { status, last_ping, notified_death } } }
 MATCH_SESSIONS = {}
 
 @server.route('/match_radar', methods=['POST'])
@@ -879,16 +749,13 @@ def match_radar():
 
     now = time.time()
 
-    # Khởi tạo phòng nếu chưa có
     if match_id not in MATCH_SESSIONS:
         MATCH_SESSIONS[match_id] = {}
 
-    # Cập nhật trạng thái người chơi
     if uid not in MATCH_SESSIONS[match_id]:
         MATCH_SESSIONS[match_id][uid] = {"status": status, "last_ping": now, "notified_death": False}
     else:
         MATCH_SESSIONS[match_id][uid]["last_ping"] = now
-        # Nếu nó đang sống mà chuyển thành chết -> Đánh dấu để thông báo
         if status == "dead" and MATCH_SESSIONS[match_id][uid]["status"] == "alive":
             MATCH_SESSIONS[match_id][uid]["status"] = "dead"
             MATCH_SESSIONS[match_id][uid]["notified_death"] = False
@@ -896,32 +763,29 @@ def match_radar():
     alive_count = 0
     new_deaths = 0
     uids_to_remove = []
-    mod_uids_list = [] # [THÊM MỚI] Danh sách chứa UID của Đồng Dâm
+    mod_uids_list = []
 
-    # Quét dọn data cũ và đếm số người
     for p_uid, p_data in MATCH_SESSIONS[match_id].items():
-        # Nếu 2 phút (120s) không thấy ping -> Coi như đã thoát game
         if now - p_data["last_ping"] > 120:
             uids_to_remove.append(p_uid)
         else:
-            mod_uids_list.append(str(p_uid)) # Bơm UID vào danh sách bảo vệ
+            mod_uids_list.append(str(p_uid))
             if p_data["status"] == "alive":
                 alive_count += 1
             elif p_data["status"] == "dead" and not p_data["notified_death"]:
                 new_deaths += 1
-                p_data["notified_death"] = True # Đã báo tử xong
+                p_data["notified_death"] = True
 
     for p_uid in uids_to_remove:
         del MATCH_SESSIONS[match_id][p_uid]
         
-    # Ghép mảng UID thành chuỗi cách nhau bởi dấu phẩy
     mod_uids_string = ",".join(mod_uids_list)
 
     return jsonify({
         "status": True,
         "alive_count": alive_count,
         "new_deaths": new_deaths,
-        "mod_uids": mod_uids_string # Trả chuỗi này về cho Client Lua đọc
+        "mod_uids": mod_uids_string 
     })
 
 if __name__ == "__main__":
