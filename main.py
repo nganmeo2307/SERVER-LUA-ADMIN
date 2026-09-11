@@ -8,6 +8,7 @@ import threading
 import time
 import requests
 import base64
+import io
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -297,6 +298,7 @@ def show_menu(m):
 1️⃣ *TẠO KEY*
    `/vip `*<tool> <ngày>*
    `/free `*<tool> <sltb> <ngày>*
+   `/vipkey `*<tool> <s.lượng> <ngày>* (Tạo SLL)
    `/custom vip `*<tool> <ngày> <key>*
    `/custom free `*<tool> <sltb> <ngày> <key>*
 
@@ -336,6 +338,81 @@ def create_vip(m):
         bot.reply_to(m, f"👑 *TẠO KEY VIP {game_id.upper()} ({label})*\n\n🔑 *KEY*: `{key}`", parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
+
+@bot.message_handler(commands=['vipkey'])
+def create_bulk_vip(m):
+    if not check_admin(m.from_user.id): return
+    try:
+        args = m.text.split()
+        if len(args) < 4: 
+            return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/vipkey LUAPAK 50 60d`", parse_mode="Markdown")
+        
+        game_id = args[1].lower()
+        
+        try:
+            amount = int(args[2])
+            if amount <= 0 or amount > 1000:
+                return bot.reply_to(m, "⚠️ Số lượng key hợp lệ từ 1 đến 1000 để tránh máy chủ bị quá tải.")
+        except ValueError:
+            return bot.reply_to(m, "⚠️ Số lượng phải là một số nguyên.")
+            
+        expiry, label = calculate_expiry(args[3])
+        if not expiry: 
+            return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
+        
+        # Báo cho Admin biết bot đang chạy để tránh việc bấm nhiều lần
+        msg_process = bot.reply_to(m, f"⏳ Đang tiến hành tạo {amount} key VIP cho {game_id.upper()}, vui lòng đợi một chút...")
+        
+        generated_keys = []
+        batch = db.batch()
+        batch_count = 0
+        
+        for _ in range(amount):
+            # Lấy 8 ký tự uuid thay vì 6 để tránh trùng lặp khi tạo SLL
+            key = f"{game_id.upper()}-VIP-{str(uuid.uuid4())[:8].upper()}"
+            doc_ref = db.collection('keys').document(key)
+            data = {
+                "type": "vip", 
+                "game_id": game_id,
+                "hwid": None, 
+                "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), 
+                "info": "Chưa kích hoạt",
+                "is_locked": False,
+                "created_at": firestore.SERVER_TIMESTAMP
+            }
+            batch.set(doc_ref, data)
+            generated_keys.append(key)
+            batch_count += 1
+            
+            # Firestore giới hạn 500 thao tác ghi mỗi Batch, nên cần commit và reset nếu đạt 500
+            if batch_count == 500:
+                batch.commit()
+                batch = db.batch()
+                batch_count = 0
+                
+        # Commit những key còn dư lại
+        if batch_count > 0:
+            batch.commit()
+            
+        # Tạo file text trên RAM bằng io.BytesIO
+        file_content = "\n".join(generated_keys)
+        file_data = io.BytesIO(file_content.encode('utf-8'))
+        file_data.name = f"List_Key_VIP_{game_id.upper()}_{amount}Keys_{label.replace(' ', '')}.txt"
+        
+        # Gửi file cho Admin
+        caption = f"✅ *ĐÃ TẠO THÀNH CÔNG {amount} KEY VIP*\n\n🎮 *Tool:* `{game_id.upper()}`\n⏳ *Hạn sử dụng:* `{label}`\n⚙️ *Thiết bị:* `1 Thiết bị (VIP)`\n\n⬇️ _Tải file đính kèm bên dưới để lấy danh sách key._"
+        bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+        
+        # Xóa tin nhắn "Đang chờ..."
+        try:
+            bot.delete_message(m.chat.id, msg_process.message_id)
+        except:
+            pass
+
+    except Exception as e: 
+        bot.reply_to(m, f"❌ Lỗi hệ thống: {e}")
+        
+        
 @bot.message_handler(commands=['free'])
 def create_free(m):
     if not check_admin(m.from_user.id): return
