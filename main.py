@@ -663,7 +663,6 @@ start_services()
 def send_top1():
     base64_image = request.form.get('base64_image')
     caption = request.form.get('caption')
-    
     vip_key = request.form.get('vip_key', '').strip()
     hwid = request.form.get('hwid', '').strip()
 
@@ -675,7 +674,6 @@ def send_top1():
     # ===============================================================
     import re
     clean_caption = caption.replace('\r', '')
-    
     safe_pattern = r"^🏆 <b>PAK LUA VIP AKMODPUBG</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: .*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
     
     if not re.match(safe_pattern, clean_caption):
@@ -767,25 +765,45 @@ def send_top1():
                     "parse_mode": "Markdown"
                 })
             except Exception as e:
-                print(f"Lỗi khi Auto Ban: {e}")
+                pass
                 
             return jsonify({"status": False, "msg": "Phát hiện Spam! Key của bạn đã bị khóa vĩnh viễn."}), 429
 
     LAST_FEEDBACK_TIME[hwid] = current_time
 
     # ===============================================================
-    # BƯỚC 1: GIẢI MÃ ẢNH TRỰC TIẾP TRÊN RAM (BỎ QUA IMGBB)
+    # BƯỚC 1: GIẢI MÃ B64 VÀ CROP 5% ĐÁY ẢNH (BẢO VỆ MÃ TRẬN)
     # ===============================================================
     try:
-        image_bytes = base64.b64decode(base64_image)
+        # 1. Giải mã an toàn
+        base64_image = base64_image.replace(" ", "+")
+        padding_needed = len(base64_image) % 4
+        if padding_needed:
+            base64_image += '=' * (4 - padding_needed)
+
+        raw_image_bytes = base64.b64decode(base64_image)
+
+        # 2. Xử lý Crop ảnh trên RAM bằng PIL
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw_image_bytes))
+        width, height = img.size
+        
+        # Cắt bỏ 5% chiều cao ở đáy ảnh (Chỉ giữ lại 95% phía trên)
+        crop_height = int(height * 0.95)
+        cropped_img = img.crop((0, 0, width, crop_height))
+        
+        # 3. Nén lại thành JPEG byte stream
+        output_io = io.BytesIO()
+        cropped_img.save(output_io, format='JPEG', quality=85)
+        final_image_bytes = output_io.getvalue()
+        
     except Exception as e:
-        return jsonify({"status": False, "msg": "Lỗi giải mã ảnh từ Game"}), 400
+        return jsonify({"status": False, "msg": f"Lỗi xử lý ảnh: {str(e)}"}), 400
 
     # ===============================================================
-    # BƯỚC 2: BẮN THẲNG ẢNH LÊN TELEGRAM BẰNG MULTIPART FILE UPLOAD
+    # BƯỚC 2: BẮN THẲNG ẢNH ĐÃ CROP LÊN TELEGRAM
     # ===============================================================
     use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
-    tg_url = f"https://api.telegram.org/bot{use_token}/sendPhoto"
     
     tg_data = {
         "chat_id": FEEDBACK_CHAT_ID,
@@ -793,9 +811,12 @@ def send_top1():
         "parse_mode": "HTML"
     }
     
-    tg_files = {
-        "photo": ("top1_akmod.jpg", image_bytes, "image/jpeg")
-    }
+    if len(final_image_bytes) > 9.5 * 1024 * 1024:
+        tg_url = f"https://api.telegram.org/bot{use_token}/sendDocument"
+        tg_files = {"document": ("top1_akmod_safe.jpg", final_image_bytes, "image/jpeg")}
+    else:
+        tg_url = f"https://api.telegram.org/bot{use_token}/sendPhoto"
+        tg_files = {"photo": ("top1_akmod_safe.jpg", final_image_bytes, "image/jpeg")}
     
     try:
         r_tg = requests.post(tg_url, data=tg_data, files=tg_files)
@@ -808,6 +829,7 @@ def send_top1():
             return jsonify({"status": False, "msg": f"Lỗi Telegram: {err_desc}"}), 500
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi kết nối Telegram: {str(e)}"}), 500
+
 
 
 # ===============================================================
