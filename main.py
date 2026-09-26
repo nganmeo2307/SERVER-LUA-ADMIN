@@ -322,7 +322,6 @@ def show_menu(m):
 def send_welcome(m):
     if check_admin(m.from_user.id): show_menu(m)
 
-# --- Các lệnh tạo, xóa, reset key giữ nguyên ---
 @bot.message_handler(commands=['vip'])
 def create_vip(m):
     if not check_admin(m.from_user.id): return
@@ -332,11 +331,25 @@ def create_vip(m):
         game_id = args[1].lower()
         expiry, label = calculate_expiry(args[2])
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
+        
         key = f"{game_id.upper()}-VIP-{str(uuid.uuid4())[:6].upper()}"
         data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP }
         db.collection('keys').document(key).set(data)
-        bot.reply_to(m, f"👑 *TẠO KEY VIP {game_id.upper()} ({label})*\n\n🔑 *KEY*: `{key}`", parse_mode="Markdown")
+        
+        # Tạo file txt trên RAM
+        file_data = io.BytesIO(key.encode('utf-8'))
+        file_data.name = "AKMOD_VIP_KEY.txt"
+        
+        # Hướng dẫn kèm theo
+        caption = (
+            f"👑 *TẠO KEY VIP {game_id.upper()} ({label})*\n\n"
+            f"📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
+            f"🍏 *Dán key IOS:*\n`/Documents/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`"
+        )
+        
+        bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
+
 
 
 @bot.message_handler(commands=['vipkey'])
@@ -423,11 +436,25 @@ def create_free(m):
         max_d = int(args[2])
         expiry, label = calculate_expiry(args[3])
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
+        
         key = f"{game_id.upper()}-FREE-{str(uuid.uuid4())[:6].upper()}"
         data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP }
         db.collection('keys').document(key).set(data)
-        bot.reply_to(m, f"🎁 *TẠO KEY FREE {game_id.upper()} ({max_d} SLOT - {label})*\n\n🔑 *KEY:* `{key}`", parse_mode="Markdown")
+        
+        # Tạo file txt trên RAM
+        file_data = io.BytesIO(key.encode('utf-8'))
+        file_data.name = "AKMOD_VIP_KEY.txt"
+        
+        # Hướng dẫn kèm theo
+        caption = (
+            f"🎁 *TẠO KEY FREE {game_id.upper()} ({max_d} SLOT - {label})*\n\n"
+            f"📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
+            f"🍏 *Dán key IOS:*\n`/Documents/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`"
+        )
+        
+        bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
+
 
 @bot.message_handler(commands=['custom'])
 def create_custom(m):
@@ -435,26 +462,54 @@ def create_custom(m):
     try:
         args = m.text.split()
         type_k = args[1].lower()
+        
+        # Cấu trúc hướng dẫn chung
+        instructions = (
+            f"\n\n📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
+            f"🍏 *Dán key IOS:*\n`/Documents/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`"
+        )
+
         if type_k == 'vip':
             game_id = args[2].lower()
             expiry, label = calculate_expiry(args[3])
             user_key_name = args[4].strip()
             db_id = f"{game_id.upper()}-{user_key_name}"
-            if db.collection('keys').document(db_id).get().exists: return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
+            
+            if db.collection('keys').document(db_id).get().exists: 
+                return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
+                
             data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False }
             db.collection('keys').document(db_id).set(data)
-            bot.reply_to(m, f"👑 *CUSTOM VIP {game_id.upper()} ({label})*\n\n🔑 *KEY:* `{user_key_name}`\n(ID Hệ thống: `{db_id}`)", parse_mode="Markdown")
+            
+            # Tạo file txt trên RAM
+            file_data = io.BytesIO(user_key_name.encode('utf-8'))
+            file_data.name = "AKMOD_VIP_KEY.txt"
+            
+            caption = f"👑 *CUSTOM VIP {game_id.upper()} ({label})* (Hệ thống: `{db_id}`)" + instructions
+            bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+            
         elif type_k == 'free':
             game_id = args[2].lower()
             max_d = int(args[3])
             expiry, label = calculate_expiry(args[4])
             user_key_name = args[5].strip()
             db_id = f"{game_id.upper()}-{user_key_name}"
-            if db.collection('keys').document(db_id).get().exists: return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
+            
+            if db.collection('keys').document(db_id).get().exists: 
+                return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
+                
             data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False }
             db.collection('keys').document(db_id).set(data)
-            bot.reply_to(m, f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*\n\n🔑 *KEY:* `{user_key_name}`", parse_mode="Markdown")
+            
+            # Tạo file txt trên RAM
+            file_data = io.BytesIO(user_key_name.encode('utf-8'))
+            file_data.name = "AKMOD_VIP_KEY.txt"
+            
+            caption = f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*" + instructions
+            bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+            
     except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
+
 
 @bot.message_handler(commands=['list'])
 def list_keys(m):
