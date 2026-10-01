@@ -62,9 +62,13 @@ except Exception as e:
     print(f"⚠️ Lỗi kết nối Firebase: {e}")
 
 # ================= HÀM HỖ TRỢ =================
+def get_vn_now():
+    """Lấy thời gian hiện tại chuẩn theo múi giờ Việt Nam (UTC+7)"""
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+
 def calculate_expiry(duration_str):
     """Tính toán thời gian hết hạn từ chuỗi (vd: 1d, 2h)"""
-    now = datetime.datetime.now()
+    now = get_vn_now()
     try:
         val = int(''.join(filter(str.isdigit, duration_str)))
         if 'd' in duration_str: return now + datetime.timedelta(days=val), f"{val} Ngày"
@@ -120,7 +124,7 @@ def auto_clean_expired_keys():
     while True:
         try:
             if db:
-                now = datetime.datetime.now()
+                now = get_vn_now()
                 now_str = now.strftime("%Y-%m-%d %H:%M:%S")
                 
                 expired_docs = db.collection('keys').where('expiry', '<', now_str).stream()
@@ -188,7 +192,7 @@ def api_check_key():
 
         try:
             expiry_dt = datetime.datetime.strptime(key_data['expiry'], "%Y-%m-%d %H:%M:%S")
-            now = datetime.datetime.now()
+            now = get_vn_now()
             if now > expiry_dt:
                 return jsonify({"status": False, "msg": "Key đã hết hạn!"})
 
@@ -278,7 +282,7 @@ def webhook_handler():
 
 @server.route("/")
 def index():
-    return f"✅ Server is Running... Time: {datetime.datetime.now()}", 200
+    return f"✅ Server is Running... Time: {get_vn_now()}", 200
 
 @server.route("/set_webhook")
 def set_webhook():
@@ -360,7 +364,6 @@ def create_vip(m):
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
-
 @bot.message_handler(commands=['vipkey'])
 def create_bulk_vip(m):
     if not check_admin(m.from_user.id): return
@@ -422,7 +425,7 @@ def create_bulk_vip(m):
         file_data.name = f"List_Key_VIP_{game_id.upper()}_{amount}Keys_{label.replace(' ', '')}.txt"
         
         # Gửi file cho Admin
-        caption = f"✅ *ĐÃ TẠO THÀNH CÔNG {amount} KEY VIP*\n\n🎮 *Tool:* `{game_id.upper()}`\n⏳ *Hạn sử dụng:* `{label}`\n⚙️ *Thiết bị:* `1 Thiết bị (VIP)`\n\n⬇️ _Tải file đính kèm bên dưới để lấy danh sách key._"
+        caption = f"✅ *ĐÃ TẠO THÀNH CÔNG {amount} KEY VIP*\n\n🎮 *Tool:* `{game_id.upper()}`\n⏳ *Hạn sử dụng:* `{label}`\n⚙️ *Thiết bị:* `1 Thiết bị (VIP)`\n\n⬇️️ _Tải file đính kèm bên dưới để lấy danh sách key._"
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
         
         # Xóa tin nhắn "Đang chờ..."
@@ -433,7 +436,7 @@ def create_bulk_vip(m):
 
     except Exception as e: 
         bot.reply_to(m, f"❌ Lỗi hệ thống: {e}")
-        
+
 @bot.message_handler(commands=['free'])
 def create_free(m):
     if not check_admin(m.from_user.id): return
@@ -463,7 +466,6 @@ def create_free(m):
         
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
-
 
 @bot.message_handler(commands=['custom'])
 def create_custom(m):
@@ -521,7 +523,6 @@ def create_custom(m):
             
     except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
 
-
 @bot.message_handler(commands=['list'])
 def list_keys(m):
     if not check_admin(m.from_user.id): return
@@ -538,7 +539,7 @@ def list_keys(m):
         expiry_str = v.get('expiry', 'N/A')
         try:
             exp = datetime.datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
-            if datetime.datetime.now() > exp: is_expired = True
+            if get_vn_now() > exp: is_expired = True
         except: pass
 
         if is_locked: stt_icon = "🔒 ĐÃ KHÓA"
@@ -605,7 +606,7 @@ def reset_key(m):
         
         dt = doc.to_dict()
         is_admin = check_admin(m.from_user.id)
-        now = datetime.datetime.now()
+        now = get_vn_now()
 
         # 2. Xử lý quyền của người dùng bình thường
         if not is_admin:
@@ -838,7 +839,7 @@ def send_top1():
         
     try:
         expiry_dt = datetime.datetime.strptime(key_data.get('expiry', ''), "%Y-%m-%d %H:%M:%S")
-        if datetime.datetime.now() > expiry_dt:
+        if get_vn_now() > expiry_dt:
             return jsonify({"status": False, "msg": "Key đã hết hạn!"}), 403
     except:
         pass
