@@ -1123,17 +1123,21 @@ def send_top1():
     caption = request.form.get('caption')
     vip_key = request.form.get('vip_key', '').strip()
     hwid = request.form.get('hwid', '').strip()
+    # Thêm lấy game_id (từ Lua gửi lên), nếu không có thì mặc định là luapak
+    game_id = request.form.get('game_id', 'luapak').strip().lower()
 
     if not base64_image or not caption or not vip_key or not hwid:
         return jsonify({"status": False, "msg": "Thiếu dữ liệu hoặc nghi ngờ Spam"}), 400
 
     import re
     clean_caption = caption.replace('\r', '')
+    # LƯU Ý: \*\*\*\*\* yêu cầu text từ Lua gửi lên MẶC ĐỊNH phải là 5 dấu sao. Nếu đổi thành tên thật sẽ bị Ban.
     safe_pattern = r"^🏆 <b>PAK LUA VIP AKMODPUBG</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: .*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
     
     if not re.match(safe_pattern, clean_caption):
         try:
-            doc, real_key_id = get_key_document(vip_key, "LUAPAK")
+            # Fix lỗi Hardcode "LUAPAK" thành biến game_id
+            doc, real_key_id = get_key_document(vip_key, game_id)
             if doc:
                 db.collection('keys').document(real_key_id).update({
                     "is_locked": True,
@@ -1141,7 +1145,6 @@ def send_top1():
                 })
                 
                 if hwid:
-                    # Ghi vào Blocked models mới
                     db.collection('blocked_models').document(hwid).set({
                         "creator_id": "AUTO_BAN",
                         "creator": "Hệ Thống",
@@ -1149,7 +1152,7 @@ def send_top1():
                     })
 
                 notify_msg = (
-                    f"🚫 *AUTO BAN SỬA TEXT BẬY BẠ* 🚫\n"
+                    f"🚫 *AUTO BAN SỬA TEXT* 🚫\n"
                     f"🔑 *Key:* `{vip_key}`\n"
                     f"📱 *HWID:* `{hwid}` (Đã Auto thêm vào Blacklist)\n"
                     f"⚠️ *Lý do:* Cố tình sửa đoạn Text gửi ảnh.\n"
@@ -1167,9 +1170,9 @@ def send_top1():
     if not db:
         return jsonify({"status": False, "msg": "Lỗi DB"}), 500
         
-    doc, real_key_id = get_key_document(vip_key, "LUAPAK")
+    doc, real_key_id = get_key_document(vip_key, game_id) # Fix lỗi ở đây
     if not doc:
-        return jsonify({"status": False, "msg": "Lỗi kết nối"}), 403
+        return jsonify({"status": False, "msg": "Lỗi kết nối hoặc Key không hợp lệ"}), 403
         
     key_data = doc.to_dict()
     if key_data.get('is_locked', False):
@@ -1229,16 +1232,16 @@ def send_top1():
 
         raw_image_bytes = base64.b64decode(base64_image)
 
+        # Xả RAM ngay lập tức sau khi xử lý ảnh bằng "with"
         from PIL import Image
-        img = Image.open(io.BytesIO(raw_image_bytes))
-        width, height = img.size
-        
-        crop_height = int(height * 0.95)
-        cropped_img = img.crop((0, 0, width, crop_height))
-        
-        output_io = io.BytesIO()
-        cropped_img.save(output_io, format='JPEG', quality=85)
-        final_image_bytes = output_io.getvalue()
+        with Image.open(io.BytesIO(raw_image_bytes)) as img:
+            width, height = img.size
+            crop_height = int(height * 0.95)
+            cropped_img = img.crop((0, 0, width, crop_height))
+            
+            output_io = io.BytesIO()
+            cropped_img.save(output_io, format='JPEG', quality=85)
+            final_image_bytes = output_io.getvalue()
         
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi xử lý ảnh: {str(e)}"}), 400
@@ -1312,8 +1315,13 @@ def match_radar():
                 new_deaths += 1
                 p_data["notified_death"] = True
 
+    # Xóa UID bị disconnect
     for p_uid in uids_to_remove:
         del MATCH_SESSIONS[match_id][p_uid]
+        
+    # CHỐNG TRÀN RAM: Xóa Match ID nếu trận đấu rỗng
+    if not MATCH_SESSIONS[match_id]:
+        del MATCH_SESSIONS[match_id]
         
     mod_uids_string = ",".join(mod_uids_list)
 
