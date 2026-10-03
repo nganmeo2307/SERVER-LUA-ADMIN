@@ -67,7 +67,7 @@ try:
             if admin_doc.exists:
                 EXTRA_ADMINS = admin_doc.to_dict().get('admin_ids', [])
         except Exception as e:
-            print(f"⚠️ Lỗi tải danh sách Admin phụ: {e}")
+            print(f"⚠ Lỗi tải danh sách Admin phụ: {e}")
 
 except Exception as e:
     print(f"⚠️ Lỗi kết nối Firebase: {e}")
@@ -114,11 +114,7 @@ def send_admin_notify(message):
         print(f"⚠️ Lỗi gửi tin nhắn: {e}")
 
 def get_key_document(client_key, game_id):
-    """
-    Tìm key trong DB.
-    1. Tìm chính xác (Key hệ thống tự sinh).
-    2. Tìm theo Prefix Game (Custom key trùng tên).
-    """
+    """Tìm key trong DB (Chính xác hoặc theo Game ID)"""
     try:
         doc_ref = db.collection('keys').document(client_key)
         doc = doc_ref.get()
@@ -154,7 +150,7 @@ def auto_clean_expired_keys():
                     key_id = doc.id
                     print(f"🗑️ Deleting expired key: {key_id}")
                     db.collection('keys').document(key_id).delete()
-                    msg = f"🗑️️ *Deleted expired key*\n`{key_id}`"
+                    msg = f"🗑 *Deleted expired key*\n`{key_id}`"
                     send_admin_notify(msg)
         except Exception as e:
             print(f"⚠️ Auto Clean thread error: {e}")
@@ -182,12 +178,16 @@ def api_check_key():
         
         # --- 1. CHECK BLOCK HWID ---
         try:
+            # Check bảng Blacklist mới (Lưu từng HWID theo Sub-admin)
+            if db.collection('blocked_models').document(client_hwid).get().exists:
+                return jsonify({"status": False, "msg": f"Thiết bị của bạn đã bị Admin chặn!"})
+            
+            # Check bảng Blacklist cũ (Legacy)
             blacklist_doc = db.collection('settings').document('blacklist').get()
             if blacklist_doc.exists:
                 blocked_models = blacklist_doc.to_dict().get('models', [])
-                for blocked_kw in blocked_models:
-                    if str(blocked_kw).strip() == client_hwid:
-                        return jsonify({"status": False, "msg": f"Thiết bị của bạn đã bị Admin chặn!"})
+                if client_hwid in blocked_models:
+                    return jsonify({"status": False, "msg": f"Thiết bị của bạn đã bị Admin chặn!"})
         except Exception: pass
 
         # --- 2. TÌM KEY ---
@@ -318,7 +318,7 @@ def show_menu(m):
         "🔥 *AKMODPUBG - SERVER QUẢN LÝ KEY* 🔥\n\n"
         "✅ *Xác thực Admin thành công!*\n"
         "Hệ thống máy chủ đang hoạt động ổn định.\n\n"
-        "👉 *Hướng dẫn:* Hãy nhấn vào nút **Menu** ở góc dưới bên trái thanh chat (hoặc gõ  `/help`) để xem và sử dụng nhanh các tính năng quản lý."
+        "👉 *Hướng dẫn:* Hãy nhấn vào nút **Menu** ở góc dưới bên trái thanh chat (hoặc gõ `/help`) để xem và sử dụng nhanh các tính năng quản lý."
     )
     bot.reply_to(m, menu_msg, parse_mode="Markdown")
 
@@ -339,30 +339,30 @@ def send_welcome(m):
 
 @bot.message_handler(commands=['help'])
 def send_detailed_help(m):
-    if check_admin(m.from_user.id):
+    if check_root_admin(m.from_user.id):
         help_text = """
-📖 *DẪN SỬ DỤNG BOT* 📖
+📖 *HƯỚNG DẪN SỬ DỤNG BOT* 📖
 
 *1️⃣ LỆNH TẠO KEY*
-▪️ `/vip <tool> <thời_gian>`
+▪️ `/vip <LUAPAK> <thời_gian>`
 Tạo 1 key VIP ngẫu nhiên cho 1 máy. 
-_VD: `/vip pubg 30d` (30 ngày), `/vip lq 12h` (12 giờ)_
+_VD: `/vip LUAPAK 30d` (30 ngày), `/vip LUAPAK 12h` (12 giờ)_
 
-▪️ `/free <tool> <số_máy> <thời_gian>`
+▪ `/free <tool> <số_máy> <thời_gian>`
 Tạo 1 key Free dùng chung cho nhiều máy. 
-_VD: `/free pubg 10 7d` (10 máy, 7 ngày)_
+_VD: `/free LUAFREE 10 7d` (10 máy, 7 ngày)_
 
 ▪️ `/vipkey <tool> <số_lượng> <thời_gian>`
 Tạo nhiều key VIP cùng lúc và xuất ra file .txt. 
-_VD: `/vipkey pubg 50 30d` (Tạo 50 key, mỗi key 30 ngày)_
+_VD: `/vipkey LUAPAK 50 30d` (Tạo 50 key, mỗi key 30 ngày)_
 
 ▪️ `/custom vip <tool> <thời_gian> <tên_key_muốn_tạo>`
 Tạo key VIP với TÊN tự chọn. 
-_VD: `/custom vip pubg 30d AKMOD-PRO`_
+_VD: `/custom vip LUAPAK 30d AKMOD-PRO`_
 
 ▪️ `/custom free <tool> <số_máy> <thời_gian> <tên_key_muốn_tạo>`
 Tạo key Free với TÊN tự chọn. 
-_VD: `/custom free pubg 100 30d AKMOD-FREE`_
+_VD: `/custom free LUAPAK 100 30d AKMOD-FREE`_
 
 *2️⃣ LỆNH QUẢN LÝ KEY*
 ▪️ `/list` : Xem toàn bộ danh sách Key trên hệ thống.
@@ -374,19 +374,31 @@ _VD: `/custom free pubg 100 30d AKMOD-FREE`_
 ▪️ `/listlockkey` : Liệt kê tất cả các key đang bị khóa.
 
 *3️⃣ LỆNH BLACKLIST (CHẶN MÁY)*
-▪️ `/blockmodel <HWID>` : Đưa 1 thiết bị vào danh chặn.
-▪️ `/unlockmodel <HWID>` : Gỡ thiết bị ra khỏi danh chặn.
+▪️ `/blockmodel <HWID>` : Đưa 1 thiết bị vào danh sách chặn.
+▪️ `/unlockmodel <HWID>` : Gỡ thiết bị ra khỏi danh sách chặn.
 ▪️ `/listblock` : Xem danh sách các HWID đang bị chặn.
-"""
-        if check_root_admin(m.from_user.id):
-            help_text += """
+
 *4️⃣ QUẢN LÝ ADMIN (CHỈ DÀNH CHO ROOT)*
-▪️ `/addadmin <ID_Telegram>` : Cấp quyền Admin cho người khác.
+▪️️ `/addadmin <ID_Telegram>` : Cấp quyền Admin cho người khác.
 ▪️ `/deladmin <ID_Telegram>` : Thu hồi quyền Admin phụ.
-▪️️ `/listadmin` : Xem danh sách Admin phụ đang hoạt động.
+▪️ `/listadmin` : Xem danh sách Admin phụ đang hoạt động.
 """
         bot.reply_to(m, help_text, parse_mode="Markdown")
         
+    elif check_admin(m.from_user.id):
+         help_text = """
+📖 *HƯỚNG DẪN SỬ DỤNG BOT* 📖
+
+*1️⃣ LỆNH TẠO KEY*
+▪️️ `/vip <LUAPAK> <thời_gian>`
+Tạo 1 key VIP ngẫu nhiên cho 1 máy. 
+_VD: `/vip LUAPAK 30d` (30 ngày), `/vip LUAPAK 12h` (12 giờ)_
+
+*2️⃣ LỆNH QUẢN LÝ KEY*
+▪️ `/reset <Tên_Key>` : Reset key thiết bị, cho phép key đăng nhập vào máy mới.
+"""
+         bot.reply_to(m, help_text, parse_mode="Markdown")
+         
     else:
         user_help_msg = (
             "📖 *HƯỚNG DẪN DÀNH CHO KHÁCH HÀNG*\n\n"
@@ -437,7 +449,7 @@ def del_admin(m):
             db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
             bot.reply_to(m, f"🗑️ Đã xóa Admin ID: `{del_id}` khỏi hệ thống!", parse_mode="Markdown")
         else:
-            bot.reply_to(m, "⚠️ ID này không có trong danh sách Admin phụ.")
+            bot.reply_to(m, "⚠ ID này không có trong danh sách Admin phụ.")
     except Exception as e:
         bot.reply_to(m, f"❌ Lỗi: {e}")
 
@@ -453,21 +465,22 @@ def list_admin(m):
         msg += f"🔹 `{ad_id}`\n"
     bot.reply_to(m, msg, parse_mode="Markdown")
 
-# --- LỆNH TẠO KEY (KÈM THÔNG BÁO CHO ROOT ADMIN) ---
+# --- LỆNH TẠO KEY VIP (ADMIN & SUB-ADMIN) ---
 @bot.message_handler(commands=['vip'])
 def create_vip(m):
     if not check_admin(m.from_user.id): return
     try:
         args = m.text.split()
-        if len(args) < 3: return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/vip pubg 1d`")
+        if len(args) < 3: return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/vip LUAPAK 1d`")
         game_id = args[1].lower()
         expiry, label = calculate_expiry(args[2])
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
         
         key = f"{game_id.upper()}-VIP-{str(uuid.uuid4())[:6].upper()}"
         creator = get_creator_name(m)
+        user_id = str(m.from_user.id)
         
-        data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP, "creator": creator }
+        data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP, "creator": creator, "creator_id": user_id }
         db.collection('keys').document(key).set(data)
         
         file_data = io.BytesIO(key.encode('utf-8'))
@@ -483,11 +496,10 @@ def create_vip(m):
         
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
         
-        # Báo cáo về ROOT nếu Admin phụ tạo
         if not check_root_admin(m.from_user.id):
             send_admin_notify(
                 f"⚠️ *ADMIN PHỤ TẠO KEY VIP*\n"
-                f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
+                f"👤 Tên: `{creator}` (ID: `{user_id}`)\n"
                 f"🎮 Game: `{game_id.upper()}`\n"
                 f"🔑 Key: `{key}`\n"
                 f"⏳ Hạn: `{label}`"
@@ -495,9 +507,11 @@ def create_vip(m):
             
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
+# --- LỆNH TẠO KEY SLL (CHỈ ROOT) ---
 @bot.message_handler(commands=['vipkey'])
 def create_bulk_vip(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         args = m.text.split()
         if len(args) < 4: 
@@ -505,6 +519,7 @@ def create_bulk_vip(m):
         
         game_id = args[1].lower()
         creator = get_creator_name(m)
+        user_id = str(m.from_user.id)
         
         try:
             amount = int(args[2])
@@ -534,7 +549,8 @@ def create_bulk_vip(m):
                 "info": "Chưa kích hoạt",
                 "is_locked": False,
                 "created_at": firestore.SERVER_TIMESTAMP,
-                "creator": creator
+                "creator": creator,
+                "creator_id": user_id
             }
             batch.set(doc_ref, data)
             generated_keys.append(key)
@@ -565,25 +581,17 @@ def create_bulk_vip(m):
         try: bot.delete_message(m.chat.id, msg_process.message_id)
         except: pass
 
-        # Báo cáo về ROOT nếu Admin phụ tạo
-        if not check_root_admin(m.from_user.id):
-            send_admin_notify(
-                f"⚠️ *ADMIN PHỤ TẠO SLL KEY VIP*\n"
-                f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
-                f"🎮 Game: `{game_id.upper()}`\n"
-                f"🔢 Số lượng: `{amount} Key`\n"
-                f"⏳ Hạn: `{label}`"
-            )
-
     except Exception as e: 
         bot.reply_to(m, f"❌ Lỗi hệ thống: {e}")
 
+# --- LỆNH TẠO KEY FREE (CHỈ ROOT) ---
 @bot.message_handler(commands=['free'])
 def create_free(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         args = m.text.split()
-        if len(args) < 4: return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/free pubg 10 1d`")
+        if len(args) < 4: return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/free LUAPAK 10 1d`")
         game_id = args[1].lower()
         max_d = int(args[2])
         expiry, label = calculate_expiry(args[3])
@@ -591,8 +599,9 @@ def create_free(m):
         
         key = f"{game_id.upper()}-FREE-{str(uuid.uuid4())[:6].upper()}"
         creator = get_creator_name(m)
+        user_id = str(m.from_user.id)
         
-        data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP, "creator": creator }
+        data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP, "creator": creator, "creator_id": user_id }
         db.collection('keys').document(key).set(data)
         
         file_data = io.BytesIO(key.encode('utf-8'))
@@ -608,26 +617,18 @@ def create_free(m):
         
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
 
-        # Báo cáo về ROOT nếu Admin phụ tạo
-        if not check_root_admin(m.from_user.id):
-            send_admin_notify(
-                f"⚠️ *ADMIN PHỤ TẠO KEY FREE*\n"
-                f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
-                f"🎮 Game: `{game_id.upper()}`\n"
-                f"🔑 Key: `{key}`\n"
-                f"📱 Số máy: `{max_d}`\n"
-                f"⏳ Hạn: `{label}`"
-            )
-
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
+# --- LỆNH TẠO CUSTOM KEY (CHỈ ROOT) ---
 @bot.message_handler(commands=['custom'])
 def create_custom(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         args = m.text.split()
         type_k = args[1].lower()
         creator = get_creator_name(m)
+        user_id = str(m.from_user.id)
         
         instructions = (
             f"\n\n📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
@@ -643,7 +644,7 @@ def create_custom(m):
             if db.collection('keys').document(db_id).get().exists: 
                 return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
                 
-            data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "creator": creator }
+            data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "creator": creator, "creator_id": user_id }
             db.collection('keys').document(db_id).set(data)
             
             file_data = io.BytesIO(user_key_name.encode('utf-8'))
@@ -652,15 +653,6 @@ def create_custom(m):
             caption = f"👑 *CUSTOM VIP {game_id.upper()} ({label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)\n👤 *Người tạo:* `{creator}`" + instructions
             bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
 
-            if not check_root_admin(m.from_user.id):
-                send_admin_notify(
-                    f"⚠️ *ADMIN PHỤ TẠO CUSTOM VIP*\n"
-                    f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
-                    f"🎮 Game: `{game_id.upper()}`\n"
-                    f"🔑 Key: `{user_key_name}`\n"
-                    f"⏳ Hạn: `{label}`"
-                )
-            
         elif type_k == 'free':
             game_id = args[2].lower()
             max_d = int(args[3])
@@ -671,7 +663,7 @@ def create_custom(m):
             if db.collection('keys').document(db_id).get().exists: 
                 return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
                 
-            data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "creator": creator }
+            data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "creator": creator, "creator_id": user_id }
             db.collection('keys').document(db_id).set(data)
             
             file_data = io.BytesIO(user_key_name.encode('utf-8'))
@@ -680,28 +672,29 @@ def create_custom(m):
             caption = f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)\n👤 *Người tạo:* `{creator}`" + instructions
             bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
             
-            if not check_root_admin(m.from_user.id):
-                send_admin_notify(
-                    f"⚠️ *ADMIN PHỤ TẠO CUSTOM FREE*\n"
-                    f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
-                    f"🎮 Game: `{game_id.upper()}`\n"
-                    f"🔑 Key: `{user_key_name}`\n"
-                    f"📱 Số máy: `{max_d}`\n"
-                    f"⏳ Hạn: `{label}`"
-                )
-            
-    except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
+    except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip LUAPAK 1d KEYNAME`\nFREE: `/custom free LUAPAK 10 1d KEYNAME`")
 
+# --- LỆNH XEM DANH SÁCH (CHỈ ROOT) ---
 @bot.message_handler(commands=['list'])
 def list_keys(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     docs = db.collection('keys').stream()
     grouped_keys = {}
     total_count = 0
+    
+    user_id = str(m.from_user.id)
+    is_root = check_root_admin(user_id)
+    
     for doc in docs:
+        v = doc.to_dict()
+        
+        # Nếu là Admin phụ, chỉ xem key do chính mình tạo
+        if not is_root and v.get('creator_id') != user_id:
+            continue
+            
         total_count += 1
         k_id = doc.id
-        v = doc.to_dict()
         game_tag = v.get('game_id', 'KHÁC').upper()
         creator = v.get('creator', 'Admin')
         is_expired = False
@@ -731,7 +724,7 @@ def list_keys(m):
         if game_tag not in grouped_keys: grouped_keys[game_tag] = []
         grouped_keys[game_tag].append(key_line)
 
-    if total_count == 0: return bot.reply_to(m, "📭 Database trống.")
+    if total_count == 0: return bot.reply_to(m, "📭 Danh sách Key trống (Hoặc bạn chưa tạo Key nào).")
 
     msg = "📊 *DANH SÁCH KEY THEO GAME*\n"
     sorted_games = sorted(grouped_keys.keys())
@@ -742,21 +735,31 @@ def list_keys(m):
 
     if len(msg) > 4000:
         safe_part = msg[:4000].replace("`", "").replace("*", "") 
-        part_1 = safe_part + "\n\n⚠️ Danh sách quá dài, chỉ hiển thị một phần..."
+        part_1 = safe_part + "\n\n⚠ Danh sách quá dài, chỉ hiển thị một phần..."
         bot.reply_to(m, part_1)
     else:
         try: bot.reply_to(m, msg, parse_mode="Markdown")
         except Exception: bot.reply_to(m, msg.replace("`", "").replace("*", ""))
 
+# --- LỆNH XÓA KEY (CHỈ ROOT) ---
 @bot.message_handler(commands=['delete'])
 def delete_key(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         key = m.text.split()[1]
-        db.collection('keys').document(key).delete()
+        doc_ref = db.collection('keys').document(key)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            return bot.reply_to(m, "❌ Key không tồn tại.", parse_mode="Markdown")
+            
+        doc_ref.delete()
         bot.reply_to(m, f"🗑️ Đã xóa key: `{key}`", parse_mode="Markdown")
+        
     except: pass
 
+# --- LỆNH RESET KEY (ADMIN & SUB-ADMIN) ---
 @bot.message_handler(commands=['reset'])
 def reset_key(m):
     try:
@@ -789,6 +792,11 @@ def reset_key(m):
                         return bot.reply_to(m, f"⏳ *Key này đã được reset trước đó!*\nBạn chỉ có thể reset 1 lần/ngày.\n\n👉 Vui lòng quay lại vào lúc: *{time_str}*", parse_mode="Markdown")
                 except Exception:
                     pass
+        else:
+            # Kiểm tra cô lập Admin phụ đối với Reset
+            if not check_root_admin(m.from_user.id):
+                if dt.get('creator_id') != str(m.from_user.id):
+                    return bot.reply_to(m, "❌ *TỪ CHỐI:* Bạn không có quyền Reset Key của người khác!", parse_mode="Markdown")
 
         update_data = {
             "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S")
@@ -804,7 +812,6 @@ def reset_key(m):
         
         bot.reply_to(m, f"✅ *Thành công!*\nĐã Reset thiết bị cho Key:\n`{key}`\n\nBây giờ bạn có thể đăng nhập vào thiết bị mới.", parse_mode="Markdown")
         
-        # Thêm thông báo chi tiết khi User tự reset
         if not is_admin_user:
             user_name = get_creator_name(m)
             notify_msg = (
@@ -814,71 +821,107 @@ def reset_key(m):
                 f"🕒 Thời gian: `{now.strftime('%H:%M:%S %d/%m/%y')}`"
             )
             send_admin_notify(notify_msg)
+        elif not check_root_admin(m.from_user.id):
+            admin_name = get_creator_name(m)
+            send_admin_notify(
+                f"⚠️ *ADMIN PHỤ RESET KEY*\n"
+                f"👤 Tên: `{admin_name}` (ID: `{m.from_user.id}`)\n"
+                f"🔑 Key: `{key}`"
+            )
             
     except Exception as e:
         bot.reply_to(m, f"❌ Có lỗi hệ thống xảy ra: {e}")
 
+# --- LỆNH RESET TOÀN BỘ KEY (CHỈ ROOT) ---
 @bot.message_handler(commands=['resetallkey'])
 def reset_all_vip_keys(m):
-    if not check_admin(m.from_user.id): return
-    msg = bot.reply_to(m, "⏳ *Đang tiến hành reset thiết bị cho toàn bộ KEY VIP. Vui lòng đợi...*", parse_mode="Markdown")
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
+    msg = bot.reply_to(m, "⏳ *Đang tiến hành reset thiết bị. Vui lòng đợi...*", parse_mode="Markdown")
     try:
         docs = db.collection('keys').where('type', '==', 'vip').stream()
         count = 0
+        user_id = str(m.from_user.id)
+        is_root = check_root_admin(user_id)
+        
         for doc in docs:
+            v = doc.to_dict()
+            # Bỏ qua nếu là Admin phụ và không phải người tạo
+            if not is_root and v.get('creator_id') != user_id:
+                continue
+                
             ref = db.collection('keys').document(doc.id)
             ref.update({"hwid": None, "info": "Đã Reset"})
             count += 1
-        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` KEY VIP trên hệ thống.", chat_id=m.chat.id, message_id=msg.message_id, parse_mode="Markdown")
+            
+        bot.edit_message_text(f"✅ *Hoàn tất!*\nĐã reset thành công thiết bị cho `{count}` KEY VIP.", chat_id=m.chat.id, message_id=msg.message_id, parse_mode="Markdown")
+            
     except Exception as e:
-        bot.edit_message_text(f"❌ *Có lỗi xảy ra trong quá trình reset:*\n`{e}`", chat_id=m.chat.id, message_id=msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"❌ *Có lỗi xảy ra:*\n`{e}`", chat_id=m.chat.id, message_id=msg.message_id, parse_mode="Markdown")
 
+# --- LỆNH KHÓA KEY (CHỈ ROOT) ---
 @bot.message_handler(commands=['lockkey'])
 def lock_key_cmd(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         args = m.text.split()
         if len(args) < 2: return bot.reply_to(m, "⚠️ Nhập tên key!")
         key = args[1]
         ref = db.collection('keys').document(key)
-        if ref.get().exists:
+        doc = ref.get()
+        if doc.exists:
             ref.update({"is_locked": True})
             bot.reply_to(m, f"🔒 Đã KHÓA key: `{key}`\n(User sẽ bị đá sau 30s)", parse_mode="Markdown")
+                
         else: bot.reply_to(m, "❌ Key không tồn tại.")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
+# --- LỆNH MỞ KHÓA KEY (CHỈ ROOT) ---
 @bot.message_handler(commands=['unlockkey'])
 def unlock_key_cmd(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         args = m.text.split()
         if len(args) < 2: return bot.reply_to(m, "⚠️ Nhập tên key!")
         key = args[1]
         ref = db.collection('keys').document(key)
-        if ref.get().exists:
+        doc = ref.get()
+        if doc.exists:
             ref.update({"is_locked": False})
             bot.reply_to(m, f"🔓 Đã MỞ KHÓA key: `{key}`", parse_mode="Markdown")
+                
         else: bot.reply_to(m, "❌ Key không tồn tại.")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
-    
+
+# --- LỆNH DANH SÁCH KEY BỊ KHÓA (CHỈ ROOT) ---    
 @bot.message_handler(commands=['listlockkey'])
 def list_locked_keys_cmd(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         docs = db.collection('keys').where('is_locked', '==', True).stream()
         count = 0
         msg = "🔒 *DANH SÁCH KEY ĐANG BỊ KHÓA* 🔒\n\n"
+        
+        user_id = str(m.from_user.id)
+        is_root = check_root_admin(user_id)
+        
         for doc in docs:
+            v = doc.to_dict()
+            if not is_root and v.get('creator_id') != user_id:
+                continue
+                
             count += 1
             k_id = doc.id
-            v = doc.to_dict()
             game_tag = v.get('game_id', 'KHÁC').upper()
             key_type = v.get('type', 'Unknown').upper()
             info = v.get('info', 'Không có ghi chú')
             hwid = v.get('hwid', 'Chưa Active')
-            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n  ├ 📱 HWID: `{hwid}`\n  └ ⚠️️ Lý do: {info}\n\n"
+            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n  ├ 📱 HWID: `{hwid}`\n  └ ⚠ Lý do: {info}\n\n"
             
-        if count == 0: return bot.reply_to(m, "📭 Hiện tại không có Key nào bị khóa.")
+        if count == 0: return bot.reply_to(m, "📭 Hiện tại không có Key nào của bạn bị khóa.")
         
         final_msg = f"📊 *Tổng cộng:* {count} Key bị khóa.\n" + "="*20 + "\n\n" + msg
         
@@ -892,41 +935,96 @@ def list_locked_keys_cmd(m):
             
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
+# --- LỆNH CHẶN THIẾT BỊ (CHỈ ROOT) ---
 @bot.message_handler(commands=['blockmodel'])
 def block_model_cmd(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         cmd_text = m.text.replace("/blockmodel", "").strip()
-        if not cmd_text: return bot.reply_to(m, "⚠️ Nhập tên Model!")
-        ref = db.collection('settings').document('blacklist')
-        if not ref.get().exists: ref.set({"models": [cmd_text]})
-        else: ref.update({"models": firestore.ArrayUnion([cmd_text])})
+        if not cmd_text: return bot.reply_to(m, "⚠️ Nhập HWID Thiết bị!")
+        
+        # Lưu vào Collection bị chặn mới có định danh
+        db.collection('blocked_models').document(cmd_text).set({
+            "creator_id": str(m.from_user.id),
+            "creator": get_creator_name(m),
+            "created_at": firestore.SERVER_TIMESTAMP
+        })
+        
         bot.reply_to(m, f"🚫 Đã thêm Model vào Blacklist:\n`{cmd_text}`", parse_mode="Markdown")
+            
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
+# --- LỆNH MỞ CHẶN THIẾT BỊ (CHỈ ROOT) ---
 @bot.message_handler(commands=['unlockmodel'])
 def unlock_model_cmd(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
         cmd_text = m.text.replace("/unlockmodel", "").strip()
-        if not cmd_text: return bot.reply_to(m, "⚠️ Nhập tên Model!")
-        ref = db.collection('settings').document('blacklist')
-        if ref.get().exists:
-            ref.update({"models": firestore.ArrayRemove([cmd_text])})
-            bot.reply_to(m, f"✅ Đã gỡ chặn Model:\n`{cmd_text}`", parse_mode="Markdown")
-        else: bot.reply_to(m, "❌ Chưa có danh sách chặn nào.")
+        if not cmd_text: return bot.reply_to(m, "⚠️ Nhập HWID Thiết bị!")
+        
+        user_id = str(m.from_user.id)
+        is_root = check_root_admin(user_id)
+        
+        doc_ref = db.collection('blocked_models').document(cmd_text)
+        doc = doc_ref.get()
+        
+        # Check fallback từ legacy
+        legacy_ref = db.collection('settings').document('blacklist')
+        legacy_doc = legacy_ref.get()
+        in_legacy = False
+        if legacy_doc.exists and cmd_text in legacy_doc.to_dict().get('models', []):
+            in_legacy = True
+            
+        if not doc.exists and not in_legacy:
+            return bot.reply_to(m, "❌ Thiết bị này không có trong danh sách chặn.")
+
+        if doc.exists:
+            doc_ref.delete()
+            
+        if in_legacy:
+            legacy_ref.update({"models": firestore.ArrayRemove([cmd_text])})
+
+        bot.reply_to(m, f"✅ Đã gỡ chặn Model:\n`{cmd_text}`", parse_mode="Markdown")
+            
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
+# --- LỆNH DANH SÁCH THIẾT BỊ BỊ CHẶN (CHỈ ROOT) ---
 @bot.message_handler(commands=['listblock'])
 def list_block_cmd(m):
-    if not check_admin(m.from_user.id): return
+    if not check_root_admin(m.from_user.id): 
+         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
     try:
-        ref = db.collection('settings').document('blacklist').get()
-        if not ref.exists: return bot.reply_to(m, "📋 Danh sách chặn trống.")
-        models = ref.to_dict().get('models', [])
-        if not models: return bot.reply_to(m, "📋 Danh sách chặn trống.")
-        msg = "🚫 **DANH SÁCH BỊ CHẶN** 🚫\n"
-        for mod in models: msg += f"- `{mod}`\n"
+        user_id = str(m.from_user.id)
+        is_root = check_root_admin(user_id)
+        
+        msg = "🚫 **DANH SÁCH THIẾT BỊ BỊ CHẶN** 🚫\n"
+        count = 0
+        
+        if is_root:
+            # Root xem toàn bộ chặn mới
+            docs = db.collection('blocked_models').stream()
+            for doc in docs:
+                count += 1
+                msg += f"- `{doc.id}` (Bởi {doc.to_dict().get('creator', 'Admin')})\n"
+                
+            # Root xem cả chặn cũ legacy
+            legacy_ref = db.collection('settings').document('blacklist').get()
+            if legacy_ref.exists:
+                for mod in legacy_ref.to_dict().get('models', []):
+                    count += 1
+                    msg += f"- `{mod}` (Hệ thống cũ)\n"
+        else:
+            # Sub-admin chỉ xem chặn của họ
+            docs = db.collection('blocked_models').where('creator_id', '==', user_id).stream()
+            for doc in docs:
+                count += 1
+                msg += f"- `{doc.id}`\n"
+                
+        if count == 0:
+            return bot.reply_to(m, "📋 Danh sách chặn của bạn trống.")
+            
         bot.reply_to(m, msg, parse_mode="Markdown")
     except Exception as e: bot.reply_to(m, f"Lỗi: {e}")
 
@@ -963,11 +1061,12 @@ def send_top1():
                 })
                 
                 if hwid:
-                    blacklist_ref = db.collection('settings').document('blacklist')
-                    if not blacklist_ref.get().exists:
-                        blacklist_ref.set({"models": [hwid]})
-                    else:
-                        blacklist_ref.update({"models": firestore.ArrayUnion([hwid])})
+                    # Ghi vào Blocked models mới
+                    db.collection('blocked_models').document(hwid).set({
+                        "creator_id": "AUTO_BAN",
+                        "creator": "Hệ Thống",
+                        "created_at": firestore.SERVER_TIMESTAMP
+                    })
 
                 notify_msg = (
                     f"🚫 *AUTO BAN SỬA TEXT BẬY BẠ* 🚫\n"
