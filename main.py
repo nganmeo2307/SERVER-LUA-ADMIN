@@ -154,7 +154,7 @@ def auto_clean_expired_keys():
                     key_id = doc.id
                     print(f"🗑️ Deleting expired key: {key_id}")
                     db.collection('keys').document(key_id).delete()
-                    msg = f"🗑️ *Deleted expired key*\n`{key_id}`"
+                    msg = f"🗑️️ *Deleted expired key*\n`{key_id}`"
                     send_admin_notify(msg)
         except Exception as e:
             print(f"⚠️ Auto Clean thread error: {e}")
@@ -313,13 +313,12 @@ def set_webhook():
     return f"✅ Webhook set to: {webhook_url}", 200
 
 # ================= BOT COMMANDS =================
-# ================= BOT COMMANDS =================
 def show_menu(m):
     menu_msg = (
         "🔥 *AKMODPUBG - SERVER QUẢN LÝ KEY* 🔥\n\n"
         "✅ *Xác thực Admin thành công!*\n"
         "Hệ thống máy chủ đang hoạt động ổn định.\n\n"
-        "👉 *Hướng dẫn:* Hãy nhấn vào nút **Menu** ở góc dưới bên trái thanh chat (hoặc gõ dấu `/`) để xem và sử dụng nhanh các tính năng quản lý."
+        "👉 *Hướng dẫn:* Hãy nhấn vào nút **Menu** ở góc dưới bên trái thanh chat (hoặc gõ  `/help`) để xem và sử dụng nhanh các tính năng quản lý."
     )
     bot.reply_to(m, menu_msg, parse_mode="Markdown")
 
@@ -454,7 +453,7 @@ def list_admin(m):
         msg += f"🔹 `{ad_id}`\n"
     bot.reply_to(m, msg, parse_mode="Markdown")
 
-# --- LỆNH TẠO KEY (HỖ TRỢ HIỂN THỊ TÊN NGƯỜI TẠO) ---
+# --- LỆNH TẠO KEY (KÈM THÔNG BÁO CHO ROOT ADMIN) ---
 @bot.message_handler(commands=['vip'])
 def create_vip(m):
     if not check_admin(m.from_user.id): return
@@ -483,6 +482,17 @@ def create_vip(m):
         )
         
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+        
+        # Báo cáo về ROOT nếu Admin phụ tạo
+        if not check_root_admin(m.from_user.id):
+            send_admin_notify(
+                f"⚠️ *ADMIN PHỤ TẠO KEY VIP*\n"
+                f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
+                f"🎮 Game: `{game_id.upper()}`\n"
+                f"🔑 Key: `{key}`\n"
+                f"⏳ Hạn: `{label}`"
+            )
+            
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['vipkey'])
@@ -555,6 +565,16 @@ def create_bulk_vip(m):
         try: bot.delete_message(m.chat.id, msg_process.message_id)
         except: pass
 
+        # Báo cáo về ROOT nếu Admin phụ tạo
+        if not check_root_admin(m.from_user.id):
+            send_admin_notify(
+                f"⚠️ *ADMIN PHỤ TẠO SLL KEY VIP*\n"
+                f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
+                f"🎮 Game: `{game_id.upper()}`\n"
+                f"🔢 Số lượng: `{amount} Key`\n"
+                f"⏳ Hạn: `{label}`"
+            )
+
     except Exception as e: 
         bot.reply_to(m, f"❌ Lỗi hệ thống: {e}")
 
@@ -587,6 +607,18 @@ def create_free(m):
         )
         
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+
+        # Báo cáo về ROOT nếu Admin phụ tạo
+        if not check_root_admin(m.from_user.id):
+            send_admin_notify(
+                f"⚠️ *ADMIN PHỤ TẠO KEY FREE*\n"
+                f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
+                f"🎮 Game: `{game_id.upper()}`\n"
+                f"🔑 Key: `{key}`\n"
+                f"📱 Số máy: `{max_d}`\n"
+                f"⏳ Hạn: `{label}`"
+            )
+
     except Exception as e: bot.reply_to(m, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['custom'])
@@ -619,6 +651,15 @@ def create_custom(m):
             
             caption = f"👑 *CUSTOM VIP {game_id.upper()} ({label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)\n👤 *Người tạo:* `{creator}`" + instructions
             bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+
+            if not check_root_admin(m.from_user.id):
+                send_admin_notify(
+                    f"⚠️ *ADMIN PHỤ TẠO CUSTOM VIP*\n"
+                    f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
+                    f"🎮 Game: `{game_id.upper()}`\n"
+                    f"🔑 Key: `{user_key_name}`\n"
+                    f"⏳ Hạn: `{label}`"
+                )
             
         elif type_k == 'free':
             game_id = args[2].lower()
@@ -638,6 +679,16 @@ def create_custom(m):
             
             caption = f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)\n👤 *Người tạo:* `{creator}`" + instructions
             bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
+            
+            if not check_root_admin(m.from_user.id):
+                send_admin_notify(
+                    f"⚠️ *ADMIN PHỤ TẠO CUSTOM FREE*\n"
+                    f"👤 Tên: `{creator}` (ID: `{m.from_user.id}`)\n"
+                    f"🎮 Game: `{game_id.upper()}`\n"
+                    f"🔑 Key: `{user_key_name}`\n"
+                    f"📱 Số máy: `{max_d}`\n"
+                    f"⏳ Hạn: `{label}`"
+                )
             
     except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
 
@@ -753,8 +804,16 @@ def reset_key(m):
         
         bot.reply_to(m, f"✅ *Thành công!*\nĐã Reset thiết bị cho Key:\n`{key}`\n\nBây giờ bạn có thể đăng nhập vào thiết bị mới.", parse_mode="Markdown")
         
+        # Thêm thông báo chi tiết khi User tự reset
         if not is_admin_user:
-            send_admin_notify(f"♻️ *USER TỰ RESET KEY VIP*\n🔑 Key: `{key}`\n👤 ID Telegram: `{m.from_user.id}`\n🕒 Thời gian: `{now.strftime('%H:%M:%S %d/%m/%y')}`")
+            user_name = get_creator_name(m)
+            notify_msg = (
+                f"♻️ *USER TỰ RESET KEY VIP*\n"
+                f"🔑 Key: `{key}`\n"
+                f"👤 Khách hàng: `{user_name}` (ID: `{m.from_user.id}`)\n"
+                f"🕒 Thời gian: `{now.strftime('%H:%M:%S %d/%m/%y')}`"
+            )
+            send_admin_notify(notify_msg)
             
     except Exception as e:
         bot.reply_to(m, f"❌ Có lỗi hệ thống xảy ra: {e}")
@@ -793,7 +852,7 @@ def unlock_key_cmd(m):
     if not check_admin(m.from_user.id): return
     try:
         args = m.text.split()
-        if len(args) < 2: return bot.reply_to(m, "⚠️️ Nhập tên key!")
+        if len(args) < 2: return bot.reply_to(m, "⚠️ Nhập tên key!")
         key = args[1]
         ref = db.collection('keys').document(key)
         if ref.get().exists:
@@ -817,7 +876,7 @@ def list_locked_keys_cmd(m):
             key_type = v.get('type', 'Unknown').upper()
             info = v.get('info', 'Không có ghi chú')
             hwid = v.get('hwid', 'Chưa Active')
-            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n  ├ 📱 HWID: `{hwid}`\n  └ ⚠️ Lý do: {info}\n\n"
+            msg += f"▪ `{k_id}` ({game_tag} - {key_type})\n  ├ 📱 HWID: `{hwid}`\n  └ ⚠️️ Lý do: {info}\n\n"
             
         if count == 0: return bot.reply_to(m, "📭 Hiện tại không có Key nào bị khóa.")
         
