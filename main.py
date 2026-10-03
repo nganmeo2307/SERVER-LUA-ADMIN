@@ -1,4 +1,5 @@
 import telebot
+from telebot.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 import json
 import uuid
 import datetime
@@ -131,6 +132,60 @@ def get_key_document(client_key, game_id):
         pass
     return None, None
 
+# ================= HỆ THỐNG MENU ĐỘNG TỪNG USER =================
+def setup_user_menu(user_id):
+    """Tạo menu Telegram dựa theo quyền của User"""
+    try:
+        user_id_str = str(user_id)
+        
+        # 1. MENU CHO USER BÌNH THƯỜNG
+        cmd_user = [
+            BotCommand("start", "Khởi động lại Bot"),
+            BotCommand("help", "Xem hướng dẫn tự reset Key"),
+            BotCommand("reset", "Tự động reset Key VIP (1 lần/ngày)")
+        ]
+        
+        # 2. MENU CHO ADMIN PHỤ
+        cmd_sub_admin = [
+            BotCommand("start", "Xem Menu hệ thống"),
+            BotCommand("help", "Xem cẩm nang Admin phụ"),
+            BotCommand("vip", "Tạo 1 Key VIP"),
+            BotCommand("list", "Xem danh sách Key bạn tạo"),
+            BotCommand("reset", "Reset thiết bị cho Key của bạn")
+        ]
+        
+        # 3. MENU CHO ROOT ADMIN (FULL)
+        cmd_root = [
+            BotCommand("start", "Xem Menu hệ thống"),
+            BotCommand("help", "Cẩm nang toàn tập"),
+            BotCommand("vip", "Tạo 1 Key VIP"),
+            BotCommand("vipkey", "Tạo SLL Key VIP xuất file .txt"),
+            BotCommand("free", "Tạo 1 Key FREE nhiều thiết bị"),
+            BotCommand("custom", "Tạo Key theo tên tự chọn"),
+            BotCommand("list", "Xem danh sách toàn bộ Key"),
+            BotCommand("delete", "Xóa Key khỏi hệ thống"),
+            BotCommand("reset", "Reset thiết bị cho 1 Key"),
+            BotCommand("resetallkey", "Reset thiết bị TOÀN BỘ Key VIP"),
+            BotCommand("lockkey", "Khóa không cho Key hoạt động"),
+            BotCommand("unlockkey", "Mở khóa cho Key"),
+            BotCommand("listlockkey", "Xem danh sách Key bị khóa"),
+            BotCommand("blockmodel", "Đưa thiết bị vào Blacklist"),
+            BotCommand("unlockmodel", "Xóa thiết bị khỏi Blacklist"),
+            BotCommand("listblock", "Xem danh sách máy bị chặn"),
+            BotCommand("addadmin", "Thêm Admin phụ (Chỉ ROOT)"),
+            BotCommand("deladmin", "Xóa Admin phụ (Chỉ ROOT)"),
+            BotCommand("listadmin", "Xem danh sách Admin phụ")
+        ]
+
+        if check_root_admin(user_id_str):
+            bot.set_my_commands(cmd_root, scope=BotCommandScopeChat(user_id_str))
+        elif check_admin(user_id_str):
+            bot.set_my_commands(cmd_sub_admin, scope=BotCommandScopeChat(user_id_str))
+        else:
+            bot.set_my_commands(cmd_user, scope=BotCommandScopeChat(user_id_str))
+    except Exception as e:
+        print(f"Lỗi set menu cho {user_id}: {e}")
+
 # ================= AUTO CLEAN EXPIRED KEYS =================
 def auto_clean_expired_keys():
     """Background thread: Scan and delete expired keys"""
@@ -178,11 +233,9 @@ def api_check_key():
         
         # --- 1. CHECK BLOCK HWID ---
         try:
-            # Check bảng Blacklist mới (Lưu từng HWID theo Sub-admin)
             if db.collection('blocked_models').document(client_hwid).get().exists:
                 return jsonify({"status": False, "msg": f"Thiết bị của bạn đã bị Admin chặn!"})
             
-            # Check bảng Blacklist cũ (Legacy)
             blacklist_doc = db.collection('settings').document('blacklist').get()
             if blacklist_doc.exists:
                 blocked_models = blacklist_doc.to_dict().get('models', [])
@@ -324,13 +377,16 @@ def show_menu(m):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(m):
+    # KÍCH HOẠT VÀ LÀM MỚI MENU ĐỘNG KHI USER GÕ /START
+    setup_user_menu(m.from_user.id)
+    
     if check_admin(m.from_user.id): 
         show_menu(m)
     else:
         welcome_msg = (
             "👋 *CHÀO MỪNG BẠN ĐẾN VỚI HỆ THỐNG QUẢN LÝ KEY*\n\n"
             "🤖 *Hỗ trợ tự động Reset thiết bị KEY VIP (1 ngày/lần)*\n"
-            "Để tự reset key, vui lòng nhắn tin cho bot theo cú pháp sau:\n"
+            "Để tự reset key, vui lòng nhấn vào menu bên góc trái hoặc gõ lệnh:\n"
             "`/reset <tên_key_vip_của_bạn>`\n\n"
             "📌 *Ví dụ:* `/reset LUATOOL-VIP-0AF3F8`\n\n"
             "💡 Gõ lệnh `/help` để xem hướng dẫn chi tiết hơn."
@@ -379,7 +435,7 @@ _VD: `/custom free LUAPAK 100 30d AKMOD-FREE`_
 ▪️ `/listblock` : Xem danh sách các HWID đang bị chặn.
 
 *4️⃣ QUẢN LÝ ADMIN (CHỈ DÀNH CHO ROOT)*
-▪️️ `/addadmin <ID_Telegram>` : Cấp quyền Admin cho người khác.
+▪ `/addadmin <ID_Telegram>` : Cấp quyền Admin cho người khác.
 ▪️ `/deladmin <ID_Telegram>` : Thu hồi quyền Admin phụ.
 ▪️ `/listadmin` : Xem danh sách Admin phụ đang hoạt động.
 """
@@ -390,11 +446,12 @@ _VD: `/custom free LUAPAK 100 30d AKMOD-FREE`_
 📖 *HƯỚNG DẪN SỬ DỤNG BOT* 📖
 
 *1️⃣ LỆNH TẠO KEY*
-▪️️ `/vip <LUAPAK> <thời_gian>`
+▪ `/vip <LUAPAK> <thời_gian>`
 Tạo 1 key VIP ngẫu nhiên cho 1 máy. 
 _VD: `/vip LUAPAK 30d` (30 ngày), `/vip LUAPAK 12h` (12 giờ)_
 
-*2️⃣ LỆNH QUẢN LÝ KEY*
+*2️⃣ LỆNH QUẢN LÝ KEY (Chỉ quản lý Key của bạn tạo)*
+▪️ `/list` : Xem toàn bộ danh sách Key do bạn tạo.
 ▪️ `/reset <Tên_Key>` : Reset key thiết bị, cho phép key đăng nhập vào máy mới.
 """
          bot.reply_to(m, help_text, parse_mode="Markdown")
@@ -431,6 +488,10 @@ def add_admin(m):
         EXTRA_ADMINS.append(new_admin)
         db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
         bot.reply_to(m, f"✅ Đã thêm Admin ID: `{new_admin}` thành công!", parse_mode="Markdown")
+        
+        # Cập nhật ngay Menu cho Admin phụ vừa được thêm
+        setup_user_menu(new_admin)
+        
     except Exception as e:
         bot.reply_to(m, f"❌ Lỗi: {e}")
 
@@ -448,6 +509,10 @@ def del_admin(m):
             EXTRA_ADMINS.remove(del_id)
             db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
             bot.reply_to(m, f"🗑️ Đã xóa Admin ID: `{del_id}` khỏi hệ thống!", parse_mode="Markdown")
+            
+            # Khôi phục Menu về trạng thái User bình thường cho người bị xóa
+            setup_user_menu(del_id)
+            
         else:
             bot.reply_to(m, "⚠ ID này không có trong danh sách Admin phụ.")
     except Exception as e:
@@ -674,11 +739,10 @@ def create_custom(m):
             
     except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip LUAPAK 1d KEYNAME`\nFREE: `/custom free LUAPAK 10 1d KEYNAME`")
 
-# --- LỆNH XEM DANH SÁCH (CHỈ ROOT) ---
+# --- LỆNH XEM DANH SÁCH (ADMIN & SUB-ADMIN) ---
 @bot.message_handler(commands=['list'])
 def list_keys(m):
-    if not check_root_admin(m.from_user.id): 
-         return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới được sử dụng tính năng này!", parse_mode="Markdown")
+    if not check_admin(m.from_user.id): return
     docs = db.collection('keys').stream()
     grouped_keys = {}
     total_count = 0
@@ -759,7 +823,7 @@ def delete_key(m):
         
     except: pass
 
-# --- LỆNH RESET KEY (ADMIN & SUB-ADMIN) ---
+# --- LỆNH RESET KEY (ADMIN & SUB-ADMIN & USER) ---
 @bot.message_handler(commands=['reset'])
 def reset_key(m):
     try:
@@ -846,7 +910,6 @@ def reset_all_vip_keys(m):
         
         for doc in docs:
             v = doc.to_dict()
-            # Bỏ qua nếu là Admin phụ và không phải người tạo
             if not is_root and v.get('creator_id') != user_id:
                 continue
                 
@@ -1030,6 +1093,23 @@ def list_block_cmd(m):
 
 # ================= STARTUP =================
 def start_services():
+    # Set Menu mặc định cho những ai chưa từng nhắn tin bot (Menu User thường)
+    try:
+        cmd_user = [
+            BotCommand("start", "Khởi động lại Bot"),
+            BotCommand("help", "Xem hướng dẫn tự reset Key"),
+            BotCommand("reset", "Tự động reset Key VIP (1 lần/ngày)")
+        ]
+        bot.set_my_commands(cmd_user, scope=BotCommandScopeDefault())
+    except Exception as e:
+        print(f"Lỗi set menu mặc định: {e}")
+
+    # Set Menu cho Root Admin lúc server mới lên
+    try:
+        if REAL_ADMIN_ID:
+            setup_user_menu(REAL_ADMIN_ID)
+    except: pass
+
     if not any(t.name == "AutoCleanThread" for t in threading.enumerate()):
         t = threading.Thread(target=auto_clean_expired_keys, name="AutoCleanThread", daemon=True)
         t.start()
