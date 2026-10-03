@@ -493,8 +493,6 @@ def add_admin(m):
         except:
             pass
             
-        added_date = get_vn_now().strftime("%d/%m/%Y")
-        
         EXTRA_ADMINS.append(new_admin)
         
         # Cập nhật danh sách và chi tiết Admin vào Firebase
@@ -502,8 +500,7 @@ def add_admin(m):
         admin_details = admin_doc.to_dict().get('admin_details', {}) if admin_doc.exists else {}
         
         admin_details[new_admin] = {
-            "name": admin_name,
-            "added_date": added_date
+            "name": admin_name
         }
         
         db.collection('settings').document('admins').set({
@@ -562,7 +559,7 @@ def list_admin(m):
     
     msg = "👑 *DANH SÁCH ADMIN PHỤ:*\n\n"
     
-    # 1. Lấy thông tin chi tiết (Tên, Ngày thêm) từ Database
+    # 1. Lấy thông tin chi tiết (Tên) từ Database
     admin_details = {}
     try:
         doc = db.collection('settings').document('admins').get()
@@ -570,11 +567,10 @@ def list_admin(m):
             admin_details = doc.to_dict().get('admin_details', {})
     except: pass
     
-    # 2. Quét Database để đếm số Key đã tạo và đang hoạt động của từng Admin
+    # 2. Quét Database để đếm số Key đã tạo và ĐÃ KÍCH HOẠT của từng Admin
     admin_stats = {}
     try:
         docs = db.collection('keys').stream()
-        now = get_vn_now()
         for doc in docs:
             v = doc.to_dict()
             c_id = v.get('creator_id')
@@ -585,14 +581,11 @@ def list_admin(m):
                 
             admin_stats[c_id]['total'] += 1
             
-            # Kiểm tra trạng thái Key (Còn hạn và không bị khóa)
-            is_expired = False
-            try:
-                exp = datetime.datetime.strptime(v.get('expiry', ''), "%Y-%m-%d %H:%M:%S")
-                if now > exp: is_expired = True
-            except: pass
-            
-            if not v.get('is_locked', False) and not is_expired:
+            # Kiểm tra trạng thái Key ĐÃ KÍCH HOẠT (Có HWID)
+            key_type = v.get('type')
+            if key_type == 'vip' and v.get('hwid'):
+                admin_stats[c_id]['active'] += 1
+            elif key_type == 'free' and len(v.get('hwids', [])) > 0:
                 admin_stats[c_id]['active'] += 1
     except: pass
     
@@ -600,7 +593,6 @@ def list_admin(m):
     for ad_id in EXTRA_ADMINS:
         details = admin_details.get(ad_id, {})
         name = details.get("name", "Unknown")
-        date_added = details.get("added_date", "N/A")
         stats = admin_stats.get(ad_id, {'total': 0, 'active': 0})
         
         # Nếu là Admin cũ chưa có tên trong DB, lấy tên từ Telegram API
@@ -612,7 +604,6 @@ def list_admin(m):
 
         msg += f"👤 *Tên admin:* `{name}`\n"
         msg += f"🆔 *ID:* `{ad_id}`\n"
-        msg += f"📅 *Ngày thêm:* `{date_added}`\n"
         msg += f"🔑 *Số key đã tạo:* `{stats['total']}`\n"
         msg += f"🟢 *Số key hoạt động:* `{stats['active']}`\n"
         msg += "➖➖➖➖➖➖➖➖\n"
