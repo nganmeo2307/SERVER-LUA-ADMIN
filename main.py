@@ -485,9 +485,33 @@ def add_admin(m):
         if new_admin in EXTRA_ADMINS or new_admin == REAL_ADMIN_ID:
             return bot.reply_to(m, "⚠️ Admin ID này đã tồn tại trong hệ thống!")
             
+        # Lấy tên Admin từ Telegram API
+        admin_name = "Unknown"
+        try:
+            chat_info = bot.get_chat(new_admin)
+            admin_name = chat_info.first_name or "Admin"
+        except:
+            pass
+            
+        added_date = get_vn_now().strftime("%d/%m/%Y")
+        
         EXTRA_ADMINS.append(new_admin)
-        db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
-        bot.reply_to(m, f"✅ Đã thêm Admin ID: `{new_admin}` thành công!", parse_mode="Markdown")
+        
+        # Cập nhật danh sách và chi tiết Admin vào Firebase
+        admin_doc = db.collection('settings').document('admins').get()
+        admin_details = admin_doc.to_dict().get('admin_details', {}) if admin_doc.exists else {}
+        
+        admin_details[new_admin] = {
+            "name": admin_name,
+            "added_date": added_date
+        }
+        
+        db.collection('settings').document('admins').set({
+            "admin_ids": EXTRA_ADMINS,
+            "admin_details": admin_details
+        }, merge=True)
+        
+        bot.reply_to(m, f"✅ Đã thêm Admin: `{admin_name}` (ID: `{new_admin}`) thành công!", parse_mode="Markdown")
         
         # Cập nhật ngay Menu cho Admin phụ vừa được thêm
         setup_user_menu(new_admin)
@@ -507,7 +531,18 @@ def del_admin(m):
         
         if del_id in EXTRA_ADMINS:
             EXTRA_ADMINS.remove(del_id)
-            db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
+            
+            # Xóa thông tin chi tiết Admin
+            admin_doc = db.collection('settings').document('admins').get()
+            admin_details = admin_doc.to_dict().get('admin_details', {}) if admin_doc.exists else {}
+            if del_id in admin_details:
+                del admin_details[del_id]
+                
+            db.collection('settings').document('admins').set({
+                "admin_ids": EXTRA_ADMINS,
+                "admin_details": admin_details
+            }, merge=True)
+            
             bot.reply_to(m, f"🗑️ Đã xóa Admin ID: `{del_id}` khỏi hệ thống!", parse_mode="Markdown")
             
             # Khôi phục Menu về trạng thái User bình thường cho người bị xóa
@@ -526,9 +561,64 @@ def list_admin(m):
         return bot.reply_to(m, "📋 Hiện tại chưa có Admin phụ nào được thêm.")
     
     msg = "👑 *DANH SÁCH ADMIN PHỤ:*\n\n"
+    
+    # 1. Lấy thông tin chi tiết (Tên, Ngày thêm) từ Database
+    admin_details = {}
+    try:
+        doc = db.collection('settings').document('admins').get()
+        if doc.exists:
+            admin_details = doc.to_dict().get('admin_details', {})
+    except: pass
+    
+    # 2. Quét Database để đếm số Key đã tạo và đang hoạt động của từng Admin
+    admin_stats = {}
+    try:
+        docs = db.collection('keys').stream()
+        now = get_vn_now()
+        for doc in docs:
+            v = doc.to_dict()
+            c_id = v.get('creator_id')
+            if not c_id: continue
+            
+            if c_id not in admin_stats:
+                admin_stats[c_id] = {'total': 0, 'active': 0}
+                
+            admin_stats[c_id]['total'] += 1
+            
+            # Kiểm tra trạng thái Key (Còn hạn và không bị khóa)
+            is_expired = False
+            try:
+                exp = datetime.datetime.strptime(v.get('expiry', ''), "%Y-%m-%d %H:%M:%S")
+                if now > exp: is_expired = True
+            except: pass
+            
+            if not v.get('is_locked', False) and not is_expired:
+                admin_stats[c_id]['active'] += 1
+    except: pass
+    
+    # 3. Xuất dữ liệu ra tin nhắn
     for ad_id in EXTRA_ADMINS:
-        msg += f"🔹 `{ad_id}`\n"
+        details = admin_details.get(ad_id, {})
+        name = details.get("name", "Unknown")
+        date_added = details.get("added_date", "N/A")
+        stats = admin_stats.get(ad_id, {'total': 0, 'active': 0})
+        
+        # Nếu là Admin cũ chưa có tên trong DB, lấy tên từ Telegram API
+        if name == "Unknown":
+            try:
+                chat_info = bot.get_chat(ad_id)
+                name = chat_info.first_name or "Admin"
+            except: pass
+
+        msg += f"👤 *Tên admin:* `{name}`\n"
+        msg += f"🆔 *ID:* `{ad_id}`\n"
+        msg += f"📅 *Ngày thêm:* `{date_added}`\n"
+        msg += f"🔑 *Số key đã tạo:* `{stats['total']}`\n"
+        msg += f"🟢 *Số key hoạt động:* `{stats['active']}`\n"
+        msg += "➖➖➖➖➖➖➖➖\n"
+        
     bot.reply_to(m, msg, parse_mode="Markdown")
+
 
 # --- LỆNH TẠO KEY VIP (ADMIN & SUB-ADMIN) ---
 @bot.message_handler(commands=['vip'])
