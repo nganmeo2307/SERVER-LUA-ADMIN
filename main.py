@@ -26,7 +26,7 @@ LAST_FEEDBACK_TIME = {}
 # Khoảng thời gian cấm gửi liên tiếp (Tính bằng giây, 600 giây = 10 phút)
 COOLDOWN_SECONDS = 600 
 
-# Xử lý ADMIN_ID để tránh lỗi format
+# Xử lý ADMIN_ID (Đây là Root Admin)
 try:
     REAL_ADMIN_ID = str(ADMIN_ID).strip().replace("Value:", "").replace(" ", "")
 except:
@@ -44,8 +44,10 @@ server.json.ensure_ascii = False
 # Khóa mõm hacker gửi file rác. Nâng lên 20MB cho ảnh iOS
 server.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 
 
-# ================= KẾT NỐI FIREBASE =================
+# ================= KẾT NỐI FIREBASE & TẢI ADMIN =================
 db = None
+EXTRA_ADMINS = []
+
 try:
     if not FIREBASE_CONFIG:
         print("❌ LỖI: Chưa cấu hình biến môi trường 'FIREBASE_JSON'")
@@ -58,6 +60,15 @@ try:
             firebase_admin.initialize_app(cred)
         db = firestore.client()
         print("✅ KẾT NỐI FIREBASE THÀNH CÔNG!")
+        
+        # Tải danh sách Admin phụ từ Database
+        try:
+            admin_doc = db.collection('settings').document('admins').get()
+            if admin_doc.exists:
+                EXTRA_ADMINS = admin_doc.to_dict().get('admin_ids', [])
+        except Exception as e:
+            print(f"⚠️ Lỗi tải danh sách Admin phụ: {e}")
+
 except Exception as e:
     print(f"⚠️ Lỗi kết nối Firebase: {e}")
 
@@ -77,12 +88,25 @@ def calculate_expiry(duration_str):
     except: pass
     return None, None
 
-def check_admin(user_id):
-    """Kiểm tra quyền Admin"""
+def check_root_admin(user_id):
+    """Kiểm tra xem có phải là Root Admin (Chủ sở hữu) không"""
     return str(user_id) == REAL_ADMIN_ID
 
+def check_admin(user_id):
+    """Kiểm tra xem có phải là Admin (Root hoặc Sub-Admin) không"""
+    user_str = str(user_id)
+    if user_str == REAL_ADMIN_ID:
+        return True
+    return user_str in EXTRA_ADMINS
+
+def get_creator_name(m):
+    """Lấy tên người tạo và lọc bỏ ký tự dễ lỗi Markdown"""
+    name = m.from_user.first_name
+    if not name: return "Admin"
+    return name.replace("*", "").replace("_", "").replace("`", "")
+
 def send_admin_notify(message):
-    """Gửi thông báo về Telegram Admin"""
+    """Gửi thông báo về Telegram Root Admin"""
     try:
         if REAL_ADMIN_ID:
             bot.send_message(REAL_ADMIN_ID, message, parse_mode="Markdown")
@@ -94,16 +118,13 @@ def get_key_document(client_key, game_id):
     Tìm key trong DB.
     1. Tìm chính xác (Key hệ thống tự sinh).
     2. Tìm theo Prefix Game (Custom key trùng tên).
-    Trả về: (document_snapshot, real_key_id_in_db)
     """
     try:
-        # Cách 1: Tìm chính xác
         doc_ref = db.collection('keys').document(client_key)
         doc = doc_ref.get()
         if doc.exists:
             return doc, client_key
 
-        # Cách 2: Tìm theo Prefix Game (Nếu client có gửi game_id)
         if game_id:
             prefixed_key = f"{game_id.upper()}-{client_key}"
             doc_ref_p = db.collection('keys').document(prefixed_key)
@@ -253,7 +274,6 @@ def api_check_key():
     except Exception as e:
         return jsonify({"status": False, "msg": f"System Error: {str(e)}"})
 
-
 # ================= API STATS =================
 @server.route('/stats', methods=['GET'])
 def api_stats():
@@ -293,48 +313,148 @@ def set_webhook():
     return f"✅ Webhook set to: {webhook_url}", 200
 
 # ================= BOT COMMANDS =================
+# ================= BOT COMMANDS =================
 def show_menu(m):
-    bot.reply_to(m, """
-🔥 *AKMODPUBG - SERVER KEY* 🔥
+    menu_msg = (
+        "🔥 *AKMODPUBG - SERVER QUẢN LÝ KEY* 🔥\n\n"
+        "✅ *Xác thực Admin thành công!*\n"
+        "Hệ thống máy chủ đang hoạt động ổn định.\n\n"
+        "👉 *Hướng dẫn:* Hãy nhấn vào nút **Menu** ở góc dưới bên trái thanh chat (hoặc gõ dấu `/`) để xem và sử dụng nhanh các tính năng quản lý."
+    )
+    bot.reply_to(m, menu_msg, parse_mode="Markdown")
 
-1️⃣ *TẠO KEY*
-   `/vip `*<tool> <ngày>*
-   `/free `*<tool> <sltb> <ngày>*
-   `/vipkey `*<tool> <s.lượng> <ngày>* (Tạo SLL)
-   `/custom vip `*<tool> <ngày> <key>*
-   `/custom free `*<tool> <sltb> <ngày> <key>*
-
-2️⃣ *QUẢN LÝ KEY*
-   `/list `- *Xem list key (theo Game)*
-   `/delete `- *Xóa key (nhập ID hệ thống)*
-   `/reset `- *Reset thiết bị (nhập ID hệ thống)*
-   `/resetallkey `- *Reset thiết bị TOÀN BỘ key*
-   `/lockkey `- *Khóa key*
-   `/unlockkey `- *Mở khóa key*
-   `/listlockkey `- *Xem danh sách Key bị khóa*
-
-3️⃣ *CHẶN THIẾT BỊ*
-   `/blockmodel `- *Chặn thiết bị*
-   `/unlockmodel `- *Mở chặn thiết bị*
-   `/listblock `- *Xem danh sách chặn*
-""", parse_mode="Markdown")
-
-@bot.message_handler(commands=['start', 'help'])
+@bot.message_handler(commands=['start'])
 def send_welcome(m):
-    # Nếu là Admin thì hiển thị Menu quản lý
     if check_admin(m.from_user.id): 
         show_menu(m)
-    # Nếu là người dùng bình thường thì hiển thị lời chào và hướng dẫn Reset
     else:
         welcome_msg = (
-            "👋 *HỆ THỐNG QUẢN LÝ KEY VIP AKMODPUBG*\n\n"
+            "👋 *CHÀO MỪNG BẠN ĐẾN VỚI HỆ THỐNG QUẢN LÝ KEY*\n\n"
             "🤖 *Hỗ trợ tự động Reset thiết bị KEY VIP (1 ngày/lần)*\n"
             "Để tự reset key, vui lòng nhắn tin cho bot theo cú pháp sau:\n"
             "`/reset <tên_key_vip_của_bạn>`\n\n"
-            "📌 *Ví dụ:* `/reset LUAPAK-VIP-99999`"
+            "📌 *Ví dụ:* `/reset LUATOOL-VIP-0AF3F8`\n\n"
+            "💡 Gõ lệnh `/help` để xem hướng dẫn chi tiết hơn."
         )
         bot.reply_to(m, welcome_msg, parse_mode="Markdown")
 
+@bot.message_handler(commands=['help'])
+def send_detailed_help(m):
+    if check_admin(m.from_user.id):
+        help_text = """
+📖 *DẪN SỬ DỤNG BOT* 📖
+
+*1️⃣ LỆNH TẠO KEY*
+▪️ `/vip <tool> <thời_gian>`
+Tạo 1 key VIP ngẫu nhiên cho 1 máy. 
+_VD: `/vip pubg 30d` (30 ngày), `/vip lq 12h` (12 giờ)_
+
+▪️ `/free <tool> <số_máy> <thời_gian>`
+Tạo 1 key Free dùng chung cho nhiều máy. 
+_VD: `/free pubg 10 7d` (10 máy, 7 ngày)_
+
+▪️ `/vipkey <tool> <số_lượng> <thời_gian>`
+Tạo nhiều key VIP cùng lúc và xuất ra file .txt. 
+_VD: `/vipkey pubg 50 30d` (Tạo 50 key, mỗi key 30 ngày)_
+
+▪️ `/custom vip <tool> <thời_gian> <tên_key_muốn_tạo>`
+Tạo key VIP với TÊN tự chọn. 
+_VD: `/custom vip pubg 30d AKMOD-PRO`_
+
+▪️ `/custom free <tool> <số_máy> <thời_gian> <tên_key_muốn_tạo>`
+Tạo key Free với TÊN tự chọn. 
+_VD: `/custom free pubg 100 30d AKMOD-FREE`_
+
+*2️⃣ LỆNH QUẢN LÝ KEY*
+▪️ `/list` : Xem toàn bộ danh sách Key trên hệ thống.
+▪️ `/delete <Tên_Key>` : Xóa vĩnh viễn key khỏi hệ thống.
+▪️ `/reset <Tên_Key>` : Reset key thiết bị, cho phép key đăng nhập vào máy mới.
+▪️ `/resetallkey` : Reset thiết bị cho TOÀN BỘ key VIP.
+▪️ `/lockkey <Tên_Key>` : Khóa ngay lập tức 1 key.
+▪️ `/unlockkey <Tên_Key>` : Mở khóa lại key đã bị khóa.
+▪️ `/listlockkey` : Liệt kê tất cả các key đang bị khóa.
+
+*3️⃣ LỆNH BLACKLIST (CHẶN MÁY)*
+▪️ `/blockmodel <HWID>` : Đưa 1 thiết bị vào danh chặn.
+▪️ `/unlockmodel <HWID>` : Gỡ thiết bị ra khỏi danh chặn.
+▪️ `/listblock` : Xem danh sách các HWID đang bị chặn.
+"""
+        if check_root_admin(m.from_user.id):
+            help_text += """
+*4️⃣ QUẢN LÝ ADMIN (CHỈ DÀNH CHO ROOT)*
+▪️ `/addadmin <ID_Telegram>` : Cấp quyền Admin cho người khác.
+▪️ `/deladmin <ID_Telegram>` : Thu hồi quyền Admin phụ.
+▪️️ `/listadmin` : Xem danh sách Admin phụ đang hoạt động.
+"""
+        bot.reply_to(m, help_text, parse_mode="Markdown")
+        
+    else:
+        user_help_msg = (
+            "📖 *HƯỚNG DẪN DÀNH CHO KHÁCH HÀNG*\n\n"
+            "🤖 *Tính năng: Tự động Reset thiết bị KEY VIP*\n"
+            "Khi bạn đổi điện thoại, cài lại ROM, hoặc xóa dữ liệu game, ID máy (HWID) sẽ bị thay đổi khiến Key không nhận diện được thiết bị cũ. Lúc này bạn cần dùng lệnh Reset.\n\n"
+            "👉 *Cú pháp thực hiện:*\n"
+            "`/reset <tên_key_vip_của_bạn>`\n\n"
+            "📌 *Ví dụ:*\n`/reset LUATOOL-VIP-0AF3F8`\n\n"
+            "⚠️ *Quy định của hệ thống:*\n"
+            "- Tính năng này *chỉ áp dụng cho Key VIP*.\n"
+            "- Mỗi Key VIP chỉ được phép tự reset *1 lần duy nhất trong vòng 24 giờ* (Tính từ lần reset gần nhất).\n"
+            "- Nếu gặp lỗi hoặc bị khóa, vui lòng liên hệ trực tiếp với Admin để được hỗ trợ."
+        )
+        bot.reply_to(m, user_help_msg, parse_mode="Markdown")
+
+# --- LỆNH QUẢN LÝ ADMIN PHỤ (CHỈ ROOT MỚI XÀI ĐƯỢC) ---
+@bot.message_handler(commands=['addadmin'])
+def add_admin(m):
+    if not check_root_admin(m.from_user.id):
+        return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN (Chủ sở hữu) mới có quyền thêm Admin khác!", parse_mode="Markdown")
+    try:
+        args = m.text.split()
+        if len(args) < 2:
+            return bot.reply_to(m, "⚠ *Sai cú pháp!* Ví dụ: `/addadmin 123456789`", parse_mode="Markdown")
+        new_admin = args[1].strip()
+        
+        if new_admin in EXTRA_ADMINS or new_admin == REAL_ADMIN_ID:
+            return bot.reply_to(m, "⚠️ Admin ID này đã tồn tại trong hệ thống!")
+            
+        EXTRA_ADMINS.append(new_admin)
+        db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
+        bot.reply_to(m, f"✅ Đã thêm Admin ID: `{new_admin}` thành công!", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(m, f"❌ Lỗi: {e}")
+
+@bot.message_handler(commands=['deladmin'])
+def del_admin(m):
+    if not check_root_admin(m.from_user.id):
+        return bot.reply_to(m, "❌ *TỪ CHỐI:* Chỉ có ROOT ADMIN mới có quyền xóa Admin!", parse_mode="Markdown")
+    try:
+        args = m.text.split()
+        if len(args) < 2:
+            return bot.reply_to(m, "⚠️ *Sai cú pháp!* Ví dụ: `/deladmin 123456789`", parse_mode="Markdown")
+        del_id = args[1].strip()
+        
+        if del_id in EXTRA_ADMINS:
+            EXTRA_ADMINS.remove(del_id)
+            db.collection('settings').document('admins').set({"admin_ids": EXTRA_ADMINS}, merge=True)
+            bot.reply_to(m, f"🗑️ Đã xóa Admin ID: `{del_id}` khỏi hệ thống!", parse_mode="Markdown")
+        else:
+            bot.reply_to(m, "⚠️ ID này không có trong danh sách Admin phụ.")
+    except Exception as e:
+        bot.reply_to(m, f"❌ Lỗi: {e}")
+
+@bot.message_handler(commands=['listadmin'])
+def list_admin(m):
+    if not check_root_admin(m.from_user.id):
+        return
+    if not EXTRA_ADMINS:
+        return bot.reply_to(m, "📋 Hiện tại chưa có Admin phụ nào được thêm.")
+    
+    msg = "👑 *DANH SÁCH ADMIN PHỤ:*\n\n"
+    for ad_id in EXTRA_ADMINS:
+        msg += f"🔹 `{ad_id}`\n"
+    bot.reply_to(m, msg, parse_mode="Markdown")
+
+# --- LỆNH TẠO KEY (HỖ TRỢ HIỂN THỊ TÊN NGƯỜI TẠO) ---
 @bot.message_handler(commands=['vip'])
 def create_vip(m):
     if not check_admin(m.from_user.id): return
@@ -346,17 +466,18 @@ def create_vip(m):
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
         
         key = f"{game_id.upper()}-VIP-{str(uuid.uuid4())[:6].upper()}"
-        data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP }
+        creator = get_creator_name(m)
+        
+        data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP, "creator": creator }
         db.collection('keys').document(key).set(data)
         
-        # Tạo file txt trên RAM
         file_data = io.BytesIO(key.encode('utf-8'))
         file_data.name = "AKMOD_VIP_KEY.txt"
         
-        # Hướng dẫn kèm theo (Đã thêm Key hiển thị trực tiếp)
         caption = (
             f"👑 *TẠO KEY VIP {game_id.upper()} ({label})*\n"
-            f"🔑 *Key:* `{key}`\n\n"
+            f"🔑 *Key:* `{key}`\n"
+            f"👤 *Người tạo:* `{creator}`\n\n"
             f"📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
             f"🍏 *Dán key IOS:*\n`/Documents/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`"
         )
@@ -373,6 +494,7 @@ def create_bulk_vip(m):
             return bot.reply_to(m, "⚠️ Sai cú pháp. Ví dụ: `/vipkey LUAPAK 50 60d`", parse_mode="Markdown")
         
         game_id = args[1].lower()
+        creator = get_creator_name(m)
         
         try:
             amount = int(args[2])
@@ -385,7 +507,6 @@ def create_bulk_vip(m):
         if not expiry: 
             return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
         
-        # Báo cho Admin biết bot đang chạy để tránh việc bấm nhiều lần
         msg_process = bot.reply_to(m, f"⏳ Đang tiến hành tạo {amount} key VIP cho {game_id.upper()}, vui lòng đợi một chút...")
         
         generated_keys = []
@@ -393,7 +514,6 @@ def create_bulk_vip(m):
         batch_count = 0
         
         for _ in range(amount):
-            # Lấy 8 ký tự uuid thay vì 6 để tránh trùng lặp khi tạo SLL
             key = f"{game_id.upper()}-VIP-{str(uuid.uuid4())[:8].upper()}"
             doc_ref = db.collection('keys').document(key)
             data = {
@@ -403,36 +523,37 @@ def create_bulk_vip(m):
                 "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), 
                 "info": "Chưa kích hoạt",
                 "is_locked": False,
-                "created_at": firestore.SERVER_TIMESTAMP
+                "created_at": firestore.SERVER_TIMESTAMP,
+                "creator": creator
             }
             batch.set(doc_ref, data)
             generated_keys.append(key)
             batch_count += 1
             
-            # Firestore giới hạn 500 thao tác ghi mỗi Batch, nên cần commit và reset nếu đạt 500
             if batch_count == 500:
                 batch.commit()
                 batch = db.batch()
                 batch_count = 0
                 
-        # Commit những key còn dư lại
         if batch_count > 0:
             batch.commit()
             
-        # Tạo file text trên RAM bằng io.BytesIO
         file_content = "\n".join(generated_keys)
         file_data = io.BytesIO(file_content.encode('utf-8'))
         file_data.name = f"List_Key_VIP_{game_id.upper()}_{amount}Keys_{label.replace(' ', '')}.txt"
         
-        # Gửi file cho Admin
-        caption = f"✅ *ĐÃ TẠO THÀNH CÔNG {amount} KEY VIP*\n\n🎮 *Tool:* `{game_id.upper()}`\n⏳ *Hạn sử dụng:* `{label}`\n⚙️ *Thiết bị:* `1 Thiết bị (VIP)`\n\n⬇️️ _Tải file đính kèm bên dưới để lấy danh sách key._"
+        caption = (
+            f"✅ *ĐÃ TẠO THÀNH CÔNG {amount} KEY VIP*\n\n"
+            f"🎮 *Tool:* `{game_id.upper()}`\n"
+            f"⏳ *Hạn sử dụng:* `{label}`\n"
+            f"⚙️ *Thiết bị:* `1 Thiết bị (VIP)`\n"
+            f"👤 *Người tạo:* `{creator}`\n\n"
+            f"⬇ _Tải file đính kèm bên dưới để lấy danh sách key._"
+        )
         bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
         
-        # Xóa tin nhắn "Đang chờ..."
-        try:
-            bot.delete_message(m.chat.id, msg_process.message_id)
-        except:
-            pass
+        try: bot.delete_message(m.chat.id, msg_process.message_id)
+        except: pass
 
     except Exception as e: 
         bot.reply_to(m, f"❌ Lỗi hệ thống: {e}")
@@ -449,17 +570,18 @@ def create_free(m):
         if not expiry: return bot.reply_to(m, "⚠️ Sai định dạng thời gian.")
         
         key = f"{game_id.upper()}-FREE-{str(uuid.uuid4())[:6].upper()}"
-        data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP }
+        creator = get_creator_name(m)
+        
+        data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "created_at": firestore.SERVER_TIMESTAMP, "creator": creator }
         db.collection('keys').document(key).set(data)
         
-        # Tạo file txt trên RAM
         file_data = io.BytesIO(key.encode('utf-8'))
         file_data.name = "AKMOD_VIP_KEY.txt"
         
-        # Hướng dẫn kèm theo (Đã thêm Key hiển thị trực tiếp)
         caption = (
             f"🎁 *TẠO KEY FREE {game_id.upper()} ({max_d} SLOT - {label})*\n"
-            f"🔑 *Key:* `{key}`\n\n"
+            f"🔑 *Key:* `{key}`\n"
+            f"👤 *Người tạo:* `{creator}`\n\n"
             f"📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
             f"🍏 *Dán key IOS:*\n`/Documents/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`"
         )
@@ -473,8 +595,8 @@ def create_custom(m):
     try:
         args = m.text.split()
         type_k = args[1].lower()
+        creator = get_creator_name(m)
         
-        # Cấu trúc hướng dẫn chung
         instructions = (
             f"\n\n📱 *Dán key Android:*\n`/storage/emulated/0/Android/data/com.vng.pubgmobile/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`\n\n"
             f"🍏 *Dán key IOS:*\n`/Documents/ShadowTrackerExtra/Saved/Paks/AKMOD_VIP_KEY.txt`"
@@ -489,15 +611,13 @@ def create_custom(m):
             if db.collection('keys').document(db_id).get().exists: 
                 return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
                 
-            data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False }
+            data = { "type": "vip", "game_id": game_id, "hwid": None, "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": "Chưa kích hoạt", "is_locked": False, "creator": creator }
             db.collection('keys').document(db_id).set(data)
             
-            # Tạo file txt trên RAM
             file_data = io.BytesIO(user_key_name.encode('utf-8'))
             file_data.name = "AKMOD_VIP_KEY.txt"
             
-            # Đã thêm Key hiển thị trực tiếp
-            caption = f"👑 *CUSTOM VIP {game_id.upper()} ({label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)" + instructions
+            caption = f"👑 *CUSTOM VIP {game_id.upper()} ({label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)\n👤 *Người tạo:* `{creator}`" + instructions
             bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
             
         elif type_k == 'free':
@@ -510,15 +630,13 @@ def create_custom(m):
             if db.collection('keys').document(db_id).get().exists: 
                 return bot.reply_to(m, f"⚠️ Key `{user_key_name}` cho game {game_id} đã tồn tại!")
                 
-            data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False }
+            data = { "type": "free", "game_id": game_id, "max_devices": max_d, "hwids": [], "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"), "info": f"Free ({max_d} slots)", "is_locked": False, "creator": creator }
             db.collection('keys').document(db_id).set(data)
             
-            # Tạo file txt trên RAM
             file_data = io.BytesIO(user_key_name.encode('utf-8'))
             file_data.name = "AKMOD_VIP_KEY.txt"
             
-            # Đã thêm Key hiển thị trực tiếp
-            caption = f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)" + instructions
+            caption = f"🎁 *CUSTOM FREE {game_id.upper()} ({max_d} SLOT - {label})*\n🔑 *Key:* `{user_key_name}`\n(Hệ thống: `{db_id}`)\n👤 *Người tạo:* `{creator}`" + instructions
             bot.send_document(m.chat.id, document=file_data, caption=caption, parse_mode="Markdown")
             
     except: bot.reply_to(m, "⚠️ Sai cú pháp custom.\nVIP: `/custom vip pubg 1d KEYNAME`\nFREE: `/custom free pubg 10 1d KEYNAME`")
@@ -534,9 +652,11 @@ def list_keys(m):
         k_id = doc.id
         v = doc.to_dict()
         game_tag = v.get('game_id', 'KHÁC').upper()
+        creator = v.get('creator', 'Admin')
         is_expired = False
         is_locked = v.get('is_locked', False)
         expiry_str = v.get('expiry', 'N/A')
+        
         try:
             exp = datetime.datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
             if get_vn_now() > exp: is_expired = True
@@ -556,7 +676,7 @@ def list_keys(m):
                 mx = v.get('max_devices', 0)
                 stt_icon = f"🎁 {used}/{mx} Slot"
 
-        key_line = f"  ▪ `{k_id}`\n    └ {stt_icon} | ⏳ {expiry_str}"
+        key_line = f"  ▪ `{k_id}`\n    ├ {stt_icon} | ⏳ {expiry_str}\n    └ 👤 Tạo bởi: {creator}"
         if game_tag not in grouped_keys: grouped_keys[game_tag] = []
         grouped_keys[game_tag].append(key_line)
 
@@ -569,16 +689,13 @@ def list_keys(m):
         msg += f"\n➖➖➖➖➖➖➖➖➖➖\n🎮 *{game}* ({len(key_list)} key)\n"
         for line in key_list: msg += line + "\n"
 
-    # Fix lỗi quá giới hạn 4000 ký tự cắt gãy markdown
     if len(msg) > 4000:
         safe_part = msg[:4000].replace("`", "").replace("*", "") 
         part_1 = safe_part + "\n\n⚠️ Danh sách quá dài, chỉ hiển thị một phần..."
         bot.reply_to(m, part_1)
     else:
-        try:
-            bot.reply_to(m, msg, parse_mode="Markdown")
-        except Exception:
-            bot.reply_to(m, msg.replace("`", "").replace("*", ""))
+        try: bot.reply_to(m, msg, parse_mode="Markdown")
+        except Exception: bot.reply_to(m, msg.replace("`", "").replace("*", ""))
 
 @bot.message_handler(commands=['delete'])
 def delete_key(m):
@@ -600,53 +717,43 @@ def reset_key(m):
         ref = db.collection('keys').document(key)
         doc = ref.get()
         
-        # 1. Nếu key không tồn tại
         if not doc.exists:
             return bot.reply_to(m, "❌ *Lỗi:* Key không tồn tại trên hệ thống. Vui lòng kiểm tra lại chính xác tên Key của bạn.", parse_mode="Markdown")
         
         dt = doc.to_dict()
-        is_admin = check_admin(m.from_user.id)
+        is_admin_user = check_admin(m.from_user.id)
         now = get_vn_now()
 
-        # 2. Xử lý quyền của người dùng bình thường
-        if not is_admin:
-            
-            # --- CHỈ CHO PHÉP RESET KEY VIP ---
+        if not is_admin_user:
             if dt.get('type') != 'vip':
                 return bot.reply_to(m, "❌ *Từ chối:* Tính năng tự reset thiết bị chỉ áp dụng cho **KEY VIP**.", parse_mode="Markdown")
 
-            # --- Kiểm tra thời gian Reset lần cuối (Cooldown 24h) ---
             last_reset_str = dt.get('last_reset_time')
             if last_reset_str:
                 try:
                     last_reset = datetime.datetime.strptime(last_reset_str, "%Y-%m-%d %H:%M:%S")
-                    next_reset = last_reset + datetime.timedelta(days=1) # Cộng thêm 1 ngày
-                    
-                    # Nếu chưa qua 24h
+                    next_reset = last_reset + datetime.timedelta(days=1)
                     if now < next_reset:
                         time_str = next_reset.strftime("%H:%M, ngày %d tháng %m năm %Y")
                         return bot.reply_to(m, f"⏳ *Key này đã được reset trước đó!*\nBạn chỉ có thể reset 1 lần/ngày.\n\n👉 Vui lòng quay lại vào lúc: *{time_str}*", parse_mode="Markdown")
                 except Exception:
-                    pass # Bỏ qua lỗi parse time nếu có
+                    pass
 
-        # 3. Tiến hành Reset
         update_data = {
-            "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S") # Lưu thời gian reset
+            "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S")
         }
         
         if dt.get('type') == 'vip':
             update_data["hwid"] = None
-            update_data["info"] = "Đã Reset (Admin)" if is_admin else "Đã Reset (User tự Reset)"
+            update_data["info"] = "Đã Reset (Admin)" if is_admin_user else "Đã Reset (User tự Reset)"
         else:
-            update_data["hwids"] = [] # Admin reset key free thì clear mảng hwids
+            update_data["hwids"] = []
             
         ref.update(update_data)
         
-        # Báo cáo thành công
         bot.reply_to(m, f"✅ *Thành công!*\nĐã Reset thiết bị cho Key:\n`{key}`\n\nBây giờ bạn có thể đăng nhập vào thiết bị mới.", parse_mode="Markdown")
         
-        # (Tùy chọn) Gửi thông báo cho Admin biết User vừa tự reset key
-        if not is_admin:
+        if not is_admin_user:
             send_admin_notify(f"♻️ *USER TỰ RESET KEY VIP*\n🔑 Key: `{key}`\n👤 ID Telegram: `{m.from_user.id}`\n🕒 Thời gian: `{now.strftime('%H:%M:%S %d/%m/%y')}`")
             
     except Exception as e:
@@ -686,7 +793,7 @@ def unlock_key_cmd(m):
     if not check_admin(m.from_user.id): return
     try:
         args = m.text.split()
-        if len(args) < 2: return bot.reply_to(m, "⚠️ Nhập tên key!")
+        if len(args) < 2: return bot.reply_to(m, "⚠️️ Nhập tên key!")
         key = args[1]
         ref = db.collection('keys').document(key)
         if ref.get().exists:
@@ -716,7 +823,6 @@ def list_locked_keys_cmd(m):
         
         final_msg = f"📊 *Tổng cộng:* {count} Key bị khóa.\n" + "="*20 + "\n\n" + msg
         
-        # Fix lỗi quá giới hạn
         if len(final_msg) > 4000:
             safe_part = final_msg[:4000].replace("`", "").replace("*", "") 
             part_1 = safe_part + "\n\n⚠️ Danh sách quá dài, chỉ hiển thị một phần..."
@@ -784,9 +890,6 @@ def send_top1():
     if not base64_image or not caption or not vip_key or not hwid:
         return jsonify({"status": False, "msg": "Thiếu dữ liệu hoặc nghi ngờ Spam"}), 400
 
-    # ===============================================================
-    # LỚP KHIÊN 1.5: CHỐNG CHỈNH SỬA TEXT BẬY BẠ (TAMPER PROTECTION)
-    # ===============================================================
     import re
     clean_caption = caption.replace('\r', '')
     safe_pattern = r"^🏆 <b>PAK LUA VIP AKMODPUBG</b> 🏆\n🔥 <b>AUTO FEEDBACK GROUP VIP</b> 🔥\n⏰ <b>Thời gian: .*</b>\n👤 <b>Tên nhân vật: \*\*\*\*\*</b>\n🔑 <b>UID: .*</b>\n🔫 <b>Số Kill: \d+</b>\n🎖 <b>Rank: .*</b>\n💬 <b>MUA MOD VIP IB ADMIN @nanamod96</b>$"
@@ -823,9 +926,6 @@ def send_top1():
             pass
         return jsonify({"status": False, "msg": "Phát hiện sửa đổi dữ liệu! Thiết bị và Key đã bị khóa vĩnh viễn."}), 403
 
-    # ===============================================================
-    # LỚP KHIÊN 1: KIỂM TRA KEY VIP VÀ HWID CÓ HỢP LỆ KHÔNG
-    # ===============================================================
     if not db:
         return jsonify({"status": False, "msg": "Lỗi DB"}), 500
         
@@ -851,9 +951,6 @@ def send_top1():
         if hwid not in key_data.get('hwids', []):
             return jsonify({"status": False, "msg": "ERROR"}), 403
 
-    # ===============================================================
-    # LỚP KHIÊN 2: CHỐNG SPAM & AUTO BAN (TRẢM THỦ)
-    # ===============================================================
     current_time = time.time()
     if hwid in LAST_FEEDBACK_TIME:
         time_passed = current_time - LAST_FEEDBACK_TIME[hwid]
@@ -886,11 +983,7 @@ def send_top1():
 
     LAST_FEEDBACK_TIME[hwid] = current_time
 
-    # ===============================================================
-    # BƯỚC 1: GIẢI MÃ B64 VÀ CROP 5% ĐÁY ẢNH (BẢO VỆ MÃ TRẬN)
-    # ===============================================================
     try:
-        # 1. Giải mã an toàn
         base64_image = base64_image.replace(" ", "+")
         padding_needed = len(base64_image) % 4
         if padding_needed:
@@ -898,16 +991,13 @@ def send_top1():
 
         raw_image_bytes = base64.b64decode(base64_image)
 
-        # 2. Xử lý Crop ảnh trên RAM bằng PIL
         from PIL import Image
         img = Image.open(io.BytesIO(raw_image_bytes))
         width, height = img.size
         
-        # Cắt bỏ 5% chiều cao ở đáy ảnh (Chỉ giữ lại 95% phía trên)
         crop_height = int(height * 0.95)
         cropped_img = img.crop((0, 0, width, crop_height))
         
-        # 3. Nén lại thành JPEG byte stream
         output_io = io.BytesIO()
         cropped_img.save(output_io, format='JPEG', quality=85)
         final_image_bytes = output_io.getvalue()
@@ -915,11 +1005,7 @@ def send_top1():
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi xử lý ảnh: {str(e)}"}), 400
 
-    # ===============================================================
-    # BƯỚC 2: BẮN THẲNG ẢNH ĐÃ CROP LÊN TELEGRAM
-    # ===============================================================
     use_token = FEEDBACK_BOT_TOKEN if FEEDBACK_BOT_TOKEN else BOT_TOKEN
-    
     tg_data = {
         "chat_id": FEEDBACK_CHAT_ID,
         "caption": caption,
@@ -945,8 +1031,6 @@ def send_top1():
     except Exception as e:
         return jsonify({"status": False, "msg": f"Lỗi kết nối Telegram: {str(e)}"}), 500
 
-
-
 # ===============================================================
 # HỆ THỐNG RADAR TOÀN CẦU (ĐỒNG BỘ NGƯỜI CHƠI TRONG TRẬN)
 # ===============================================================
@@ -956,7 +1040,7 @@ MATCH_SESSIONS = {}
 def match_radar():
     match_id = request.form.get('match_id', '').strip()
     uid = request.form.get('uid', '').strip()
-    status = request.form.get('status', 'alive').strip() # alive / dead
+    status = request.form.get('status', 'alive').strip()
 
     if not match_id or not uid or match_id == "LOBBY":
         return jsonify({"status": False})
